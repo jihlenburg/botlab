@@ -61,6 +61,11 @@ class ClaudeSettings(BaseSettings):
     max_tokens: int = Field(default=4096)
     analysis_interval_minutes: int = Field(default=30)
 
+    # CLI mode settings (use Claude Code CLI instead of SDK)
+    use_cli: bool = Field(default=False, description="Use Claude Code CLI instead of SDK")
+    cli_path: str = Field(default="claude", description="Path to Claude CLI executable")
+    cli_timeout: int = Field(default=120, description="CLI invocation timeout in seconds")
+
 
 class MonitoringSettings(BaseSettings):
     """Monitoring thresholds."""

@@ -74,13 +74,29 @@ def alerting_settings() -> AlertingSettings:
 
 @pytest.fixture
 def claude_settings() -> ClaudeSettings:
-    """Create test Claude settings."""
+    """Create test Claude settings (SDK mode)."""
     return ClaudeSettings(
         enabled=True,
         api_key=SecretStr("test-anthropic-key"),
         model="claude-sonnet-4-20250514",
         max_tokens=4096,
         analysis_interval_minutes=30,
+        use_cli=False,
+    )
+
+
+@pytest.fixture
+def claude_settings_cli() -> ClaudeSettings:
+    """Create test Claude settings (CLI mode)."""
+    return ClaudeSettings(
+        enabled=True,
+        api_key=SecretStr("test-anthropic-key"),
+        model="claude-sonnet-4-20250514",
+        max_tokens=4096,
+        analysis_interval_minutes=30,
+        use_cli=True,
+        cli_path="claude",
+        cli_timeout=60,
     )
 
 

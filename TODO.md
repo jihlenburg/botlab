@@ -105,11 +105,21 @@
 
 ### Phase 6: Future Enhancements (Priority: LOW)
 
-- [ ] Implement Integrator Bot (Claude Code CLI)
-- [ ] Add MCP servers as per `INTEGRATOR-BOT-PLAN.md`
+- [x] **Claude Code CLI Integration** (Phase 1)
+  - [x] `src/ai/claude_cli.py` - CLI wrapper for Claude Code invocation
+  - [x] Updated `src/ai/analyst.py` - Supports both SDK and CLI modes
+  - [x] Updated `src/config.py` - Added `use_cli`, `cli_path`, `cli_timeout` settings
+  - [x] Updated tests for both modes
+
+- [x] **MCP Server Scaffolds Created**
+  - [x] `mcp/gitlab-server/` - GitLab API operations (list_projects, get_merge_requests, trigger_pipeline)
+  - [x] `mcp/hetzner-server/` - Hetzner Cloud operations (list_servers, create_server, power_action)
+  - [x] `mcp/borg-server/` - BorgBackup operations (list_archives, check_repo, get_backup_info)
+
 - [ ] Implement per-project `.gitlab-bot.yml` scanning
 - [ ] Add Grafana dashboards
 - [ ] Add Slack/Teams integration
+- [ ] Complete MCP server testing and deployment
 
 ---
 
@@ -166,3 +176,13 @@ docker compose up -d
 | `gitlab-admin-bot/src/main.py` | Updated | MaintenanceRunner, new API endpoints |
 | `Makefile` | Created | Development commands |
 | `.pre-commit-config.yaml` | Created | Pre-commit hooks |
+| `gitlab-admin-bot/src/ai/claude_cli.py` | Created | Claude Code CLI wrapper |
+| `gitlab-admin-bot/src/ai/analyst.py` | Updated | SDK/CLI dual mode support |
+| `gitlab-admin-bot/src/ai/__init__.py` | Updated | Export new classes |
+| `gitlab-admin-bot/src/config.py` | Updated | CLI mode configuration |
+| `gitlab-admin-bot/tests/test_ai_analyst.py` | Updated | CLI mode tests |
+| `gitlab-admin-bot/tests/conftest.py` | Updated | CLI settings fixture |
+| `gitlab-admin-bot/pyproject.toml` | Updated | Added mcp dependency |
+| `gitlab-admin-bot/mcp/gitlab-server/server.py` | Created | GitLab MCP server |
+| `gitlab-admin-bot/mcp/hetzner-server/server.py` | Created | Hetzner MCP server |
+| `gitlab-admin-bot/mcp/borg-server/server.py` | Created | Borg MCP server |

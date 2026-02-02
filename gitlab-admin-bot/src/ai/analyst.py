@@ -1,4 +1,4 @@
-"""AI-powered system analyst using Claude API."""
+"""AI-powered system analyst using Claude API or CLI."""
 
 from __future__ import annotations
 
@@ -6,12 +6,14 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import anthropic
 import structlog
 
 from src.config import ClaudeSettings
+
+if TYPE_CHECKING:
+    import anthropic
 
 logger = structlog.get_logger(__name__)
 
@@ -116,14 +118,45 @@ Always err on the side of caution. If unsure, recommend manual review."""
 
 
 class AIAnalyst:
-    """AI-powered system analyst using Claude API."""
+    """AI-powered system analyst using Claude API or CLI."""
 
     def __init__(self, settings: ClaudeSettings) -> None:
         self.settings = settings
-        self.client = anthropic.Anthropic(
-            api_key=settings.api_key.get_secret_value()
-        )
+        self._use_cli = settings.use_cli
         self._history: list[AnalysisResult] = []
+
+        if self._use_cli:
+            # Use Claude Code CLI
+            from src.ai.claude_cli import ClaudeCLI, CLISettings
+
+            cli_settings = CLISettings(
+                cli_path=settings.cli_path,
+                timeout=settings.cli_timeout,
+            )
+            self._cli = ClaudeCLI(cli_settings)
+            self._client: anthropic.Anthropic | None = None
+            logger.info("AI Analyst using CLI mode", cli_path=settings.cli_path)
+        else:
+            # Use Anthropic SDK directly
+            import anthropic
+
+            self._client = anthropic.Anthropic(
+                api_key=settings.api_key.get_secret_value()
+            )
+            self._cli = None
+            logger.info("AI Analyst using SDK mode", model=settings.model)
+
+    @property
+    def client(self) -> anthropic.Anthropic:
+        """Get the Anthropic client (for backward compatibility)."""
+        if self._client is None:
+            raise RuntimeError("Anthropic client not available in CLI mode")
+        return self._client
+
+    @client.setter
+    def client(self, value: anthropic.Anthropic) -> None:
+        """Set the Anthropic client (for testing)."""
+        self._client = value
 
     async def analyze_system_state(
         self,
@@ -133,34 +166,20 @@ class AIAnalyst:
         additional_context: str | None = None,
     ) -> AnalysisResult:
         """Analyze system state and recommend actions."""
-        logger.info("Starting AI analysis")
+        logger.info("Starting AI analysis", mode="cli" if self._use_cli else "sdk")
 
         # Prepare the context for Claude
-        context = self._prepare_context(health, resources, backup, additional_context)
+        context_str = self._prepare_context(health, resources, backup, additional_context)
 
         try:
-            # Call Claude API
-            message = self.client.messages.create(
-                model=self.settings.model,
-                max_tokens=self.settings.max_tokens,
-                system=SYSTEM_PROMPT,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": (
-                            f"Please analyze the current system state and provide "
-                            f"recommendations.\n\n"
-                            f"Current timestamp: {datetime.now().isoformat()}\n\n"
-                            f"{context}\n\n"
-                            f"Provide your analysis as JSON."
-                        ),
-                    }
-                ],
-            )
-
-            # Parse response
-            response_text = message.content[0].text
-            result = self._parse_response(response_text)
+            if self._use_cli:
+                # Use Claude Code CLI
+                result = await self._analyze_via_cli(
+                    health, resources, backup, context_str
+                )
+            else:
+                # Use Anthropic SDK
+                result = await self._analyze_via_sdk(context_str)
 
             # Store in history
             self._history.append(result)
@@ -176,11 +195,91 @@ class AIAnalyst:
 
             return result
 
+        except Exception as e:
+            logger.error("AI analysis failed", error=str(e))
+            raise
+
+    async def _analyze_via_sdk(self, context_str: str) -> AnalysisResult:
+        """Analyze system state using Anthropic SDK."""
+        import anthropic
+
+        try:
+            message = self.client.messages.create(
+                model=self.settings.model,
+                max_tokens=self.settings.max_tokens,
+                system=SYSTEM_PROMPT,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Please analyze the current system state and provide "
+                            f"recommendations.\n\n"
+                            f"Current timestamp: {datetime.now().isoformat()}\n\n"
+                            f"{context_str}\n\n"
+                            f"Provide your analysis as JSON."
+                        ),
+                    }
+                ],
+            )
+
+            response_text = message.content[0].text
+            return self._parse_response(response_text)
+
         except anthropic.APIError as e:
             logger.error("Claude API error", error=str(e))
             raise
-        except Exception as e:
-            logger.error("AI analysis failed", error=str(e))
+
+    async def _analyze_via_cli(
+        self,
+        health: dict[str, Any],
+        resources: dict[str, Any],
+        backup: dict[str, Any],
+        context_str: str,
+    ) -> AnalysisResult:
+        """Analyze system state using Claude Code CLI."""
+        from src.ai.claude_cli import ClaudeCLIError
+
+        context_dict = {
+            "timestamp": datetime.now().isoformat(),
+            "health": health,
+            "resources": resources,
+            "backup": backup,
+            "formatted_context": context_str,
+        }
+
+        try:
+            cli_result = await self._cli.analyze_system_state(
+                context=context_dict,
+                system_prompt=SYSTEM_PROMPT,
+            )
+
+            # Convert CLI result to AnalysisResult
+            actions = []
+            for action_data in cli_result.get("actions", []):
+                actions.append(
+                    RecommendedAction(
+                        name=action_data.get("name", "unknown"),
+                        description=action_data.get("description", ""),
+                        reason=action_data.get("reason", ""),
+                        urgency=Urgency(action_data.get("urgency", "info")),
+                        auto_execute=action_data.get("auto_execute", False),
+                        command=action_data.get("command"),
+                        parameters=action_data.get("parameters", {}),
+                    )
+                )
+
+            return AnalysisResult(
+                timestamp=datetime.now(),
+                summary=cli_result.get("summary", "Analysis completed"),
+                actions_needed=cli_result.get("actions_needed", False),
+                urgency=Urgency(cli_result.get("urgency", "info")),
+                recommendations=cli_result.get("recommendations", []),
+                recommended_actions=actions,
+                raw_analysis=json.dumps(cli_result.get("raw_response", cli_result)),
+            )
+
+        except ClaudeCLIError as e:
+            logger.error("Claude CLI error", error=str(e), stderr=e.stderr)
             raise
 
     def _prepare_context(
@@ -269,6 +368,15 @@ class AIAnalyst:
 
     async def ask(self, question: str, context: dict[str, Any] | None = None) -> str:
         """Ask Claude a specific question about the system."""
+        if self._use_cli:
+            return await self._ask_via_cli(question, context)
+        else:
+            return await self._ask_via_sdk(question, context)
+
+    async def _ask_via_sdk(
+        self, question: str, context: dict[str, Any] | None = None
+    ) -> str:
+        """Ask a question using Anthropic SDK."""
         context_str = ""
         if context:
             context_str = f"\n\nContext:\n{json.dumps(context, indent=2, default=str)}"
@@ -286,6 +394,16 @@ class AIAnalyst:
         )
 
         return message.content[0].text
+
+    async def _ask_via_cli(
+        self, question: str, context: dict[str, Any] | None = None
+    ) -> str:
+        """Ask a question using Claude Code CLI."""
+        return await self._cli.ask(
+            question=question,
+            context=context,
+            system_prompt=SYSTEM_PROMPT,
+        )
 
     def get_history(self, limit: int = 10) -> list[AnalysisResult]:
         """Get recent analysis history."""

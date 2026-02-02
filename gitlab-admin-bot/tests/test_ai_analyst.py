@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 from datetime import datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from src.ai.analyst import AIAnalyst, AnalysisResult, RecommendedAction, Urgency
+from src.ai.claude_cli import CLISettings, ClaudeCLI, ClaudeCLIError
 
 
 class TestUrgency:
@@ -316,3 +319,292 @@ class TestAIAnalystErrorHandling:
             await analyst_with_error.analyze_system_state(
                 health={}, resources={}, backup={}
             )
+
+
+class TestClaudeCLI:
+    """Tests for Claude CLI wrapper."""
+
+    @pytest.fixture
+    def cli_settings(self):
+        """Create CLI settings for testing."""
+        return CLISettings(
+            cli_path="claude",
+            timeout=60,
+            output_format="json",
+        )
+
+    @pytest.fixture
+    def mock_subprocess_success(self):
+        """Mock successful subprocess execution."""
+        async def mock_communicate():
+            return (
+                b'{"result": "{\\"summary\\": \\"System healthy\\", \\"actions_needed\\": false, \\"urgency\\": \\"info\\", \\"recommendations\\": [], \\"actions\\": []}"}',
+                b"",
+            )
+
+        mock_process = MagicMock()
+        mock_process.communicate = mock_communicate
+        mock_process.returncode = 0
+        mock_process.kill = MagicMock()
+        return mock_process
+
+    @pytest.fixture
+    def mock_subprocess_json_output(self):
+        """Mock subprocess with direct JSON output."""
+        async def mock_communicate():
+            return (
+                json.dumps({
+                    "summary": "System is healthy",
+                    "actions_needed": False,
+                    "urgency": "info",
+                    "recommendations": ["Continue monitoring"],
+                    "actions": [],
+                }).encode(),
+                b"",
+            )
+
+        mock_process = MagicMock()
+        mock_process.communicate = mock_communicate
+        mock_process.returncode = 0
+        return mock_process
+
+    def test_cli_settings_defaults(self):
+        """Test CLI settings have correct defaults."""
+        settings = CLISettings()
+        assert settings.cli_path == "claude"
+        assert settings.timeout == 120
+        assert settings.output_format == "json"
+
+    def test_cli_initialization(self, cli_settings):
+        """Test CLI wrapper initialization."""
+        with patch("shutil.which", return_value="/usr/local/bin/claude"):
+            cli = ClaudeCLI(cli_settings)
+            assert cli.settings.cli_path == "claude"
+
+    def test_cli_not_found_warning(self, cli_settings, caplog):
+        """Test warning when CLI not found."""
+        with patch("shutil.which", return_value=None):
+            ClaudeCLI(cli_settings)
+            # Should log a warning but not raise
+
+    @pytest.mark.asyncio
+    async def test_run_prompt_success(self, cli_settings, mock_subprocess_json_output):
+        """Test successful prompt execution."""
+        with patch("shutil.which", return_value="/usr/local/bin/claude"):
+            cli = ClaudeCLI(cli_settings)
+
+        with patch(
+            "asyncio.create_subprocess_exec",
+            return_value=mock_subprocess_json_output,
+        ):
+            result = await cli.run_prompt("Test prompt")
+
+            assert "summary" in result or "text" in result
+
+    @pytest.mark.asyncio
+    async def test_run_prompt_failure(self, cli_settings):
+        """Test handling of CLI failure."""
+        async def mock_communicate():
+            return (b"", b"Error: Something went wrong")
+
+        mock_process = MagicMock()
+        mock_process.communicate = mock_communicate
+        mock_process.returncode = 1
+
+        with patch("shutil.which", return_value="/usr/local/bin/claude"):
+            cli = ClaudeCLI(cli_settings)
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_process):
+            with pytest.raises(ClaudeCLIError) as exc_info:
+                await cli.run_prompt("Test prompt")
+
+            assert exc_info.value.returncode == 1
+            assert "Something went wrong" in exc_info.value.stderr
+
+    @pytest.mark.asyncio
+    async def test_run_prompt_timeout(self, cli_settings):
+        """Test handling of CLI timeout."""
+        async def mock_communicate():
+            await asyncio.sleep(10)  # Longer than timeout
+            return (b"", b"")
+
+        mock_process = MagicMock()
+        mock_process.communicate = mock_communicate
+        mock_process.kill = MagicMock()
+
+        # Use very short timeout
+        cli_settings.timeout = 0.01
+
+        with patch("shutil.which", return_value="/usr/local/bin/claude"):
+            cli = ClaudeCLI(cli_settings)
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_process):
+            with pytest.raises(ClaudeCLIError) as exc_info:
+                await cli.run_prompt("Test prompt")
+
+            assert "timed out" in str(exc_info.value)
+
+    def test_parse_cli_output_json(self, cli_settings):
+        """Test parsing JSON output."""
+        with patch("shutil.which", return_value="/usr/local/bin/claude"):
+            cli = ClaudeCLI(cli_settings)
+
+        output = '{"summary": "Test", "urgency": "info"}'
+        result = cli._parse_cli_output(output, "json")
+
+        assert result["summary"] == "Test"
+        assert result["urgency"] == "info"
+
+    def test_parse_cli_output_wrapped_json(self, cli_settings):
+        """Test parsing wrapped JSON output from CLI."""
+        with patch("shutil.which", return_value="/usr/local/bin/claude"):
+            cli = ClaudeCLI(cli_settings)
+
+        output = json.dumps({
+            "result": '{"summary": "Wrapped test", "actions_needed": false}'
+        })
+        result = cli._parse_cli_output(output, "json")
+
+        assert result["summary"] == "Wrapped test"
+
+    def test_parse_cli_output_text(self, cli_settings):
+        """Test parsing plain text output."""
+        with patch("shutil.which", return_value="/usr/local/bin/claude"):
+            cli = ClaudeCLI(cli_settings)
+
+        output = "This is plain text response"
+        result = cli._parse_cli_output(output, "text")
+
+        assert result["text"] == output
+
+    @pytest.mark.asyncio
+    async def test_analyze_system_state(self, cli_settings, mock_subprocess_json_output):
+        """Test system state analysis via CLI."""
+        with patch("shutil.which", return_value="/usr/local/bin/claude"):
+            cli = ClaudeCLI(cli_settings)
+
+        with patch(
+            "asyncio.create_subprocess_exec",
+            return_value=mock_subprocess_json_output,
+        ):
+            result = await cli.analyze_system_state(
+                context={"health": {"status": "ok"}},
+                system_prompt="You are a system admin.",
+            )
+
+            assert "summary" in result
+            assert "actions_needed" in result
+            assert "urgency" in result
+
+    @pytest.mark.asyncio
+    async def test_ask_question(self, cli_settings):
+        """Test asking a question via CLI."""
+        async def mock_communicate():
+            return (b"The answer is 42", b"")
+
+        mock_process = MagicMock()
+        mock_process.communicate = mock_communicate
+        mock_process.returncode = 0
+
+        with patch("shutil.which", return_value="/usr/local/bin/claude"):
+            cli = ClaudeCLI(cli_settings)
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_process):
+            answer = await cli.ask("What is the meaning of life?")
+
+            assert "42" in answer
+
+
+class TestAIAnalystCLIMode:
+    """Tests for AIAnalyst in CLI mode."""
+
+    @pytest.fixture
+    def mock_cli(self):
+        """Create a mocked ClaudeCLI."""
+        cli = MagicMock()
+        cli.analyze_system_state = AsyncMock(return_value={
+            "summary": "System healthy via CLI",
+            "actions_needed": False,
+            "urgency": "info",
+            "recommendations": ["All good"],
+            "actions": [],
+            "raw_response": {},
+        })
+        cli.ask = AsyncMock(return_value="CLI response")
+        return cli
+
+    @pytest.fixture
+    def ai_analyst_cli(self, claude_settings_cli, mock_cli):
+        """Create an AIAnalyst in CLI mode with mocked CLI."""
+        with patch("shutil.which", return_value="/usr/local/bin/claude"):
+            with patch(
+                "src.ai.claude_cli.ClaudeCLI",
+                return_value=mock_cli,
+            ):
+                analyst = AIAnalyst(claude_settings_cli)
+                analyst._cli = mock_cli
+                return analyst
+
+    @pytest.mark.asyncio
+    async def test_analyze_via_cli(
+        self,
+        ai_analyst_cli,
+        sample_health_status,
+        sample_resource_status,
+        sample_backup_status,
+    ):
+        """Test analysis using CLI backend."""
+        result = await ai_analyst_cli.analyze_system_state(
+            health=sample_health_status,
+            resources=sample_resource_status,
+            backup=sample_backup_status,
+        )
+
+        assert isinstance(result, AnalysisResult)
+        assert result.summary == "System healthy via CLI"
+        assert result.urgency == Urgency.INFO
+
+    @pytest.mark.asyncio
+    async def test_ask_via_cli(self, ai_analyst_cli):
+        """Test asking a question via CLI backend."""
+        answer = await ai_analyst_cli.ask("Test question")
+
+        assert answer == "CLI response"
+        ai_analyst_cli._cli.ask.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_cli_error_handling(self, ai_analyst_cli):
+        """Test handling of CLI errors."""
+        ai_analyst_cli._cli.analyze_system_state = AsyncMock(
+            side_effect=ClaudeCLIError("CLI failed", returncode=1)
+        )
+
+        with pytest.raises(ClaudeCLIError):
+            await ai_analyst_cli.analyze_system_state(
+                health={}, resources={}, backup={}
+            )
+
+    def test_client_property_raises_in_cli_mode(self, ai_analyst_cli):
+        """Test that accessing client property raises in CLI mode."""
+        ai_analyst_cli._client = None  # Ensure client is None
+        with pytest.raises(RuntimeError, match="not available in CLI mode"):
+            _ = ai_analyst_cli.client
+
+    @pytest.mark.asyncio
+    async def test_history_tracking_in_cli_mode(
+        self,
+        ai_analyst_cli,
+        sample_health_status,
+        sample_resource_status,
+        sample_backup_status,
+    ):
+        """Test that history is tracked in CLI mode."""
+        await ai_analyst_cli.analyze_system_state(
+            health=sample_health_status,
+            resources=sample_resource_status,
+            backup=sample_backup_status,
+        )
+
+        history = ai_analyst_cli.get_history()
+        assert len(history) == 1
+        assert history[0].summary == "System healthy via CLI"
