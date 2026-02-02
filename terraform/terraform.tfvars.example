@@ -1,0 +1,54 @@
+# =============================================================================
+# Example Terraform Variables
+# =============================================================================
+# Copy this file to terraform.tfvars and fill in your values
+
+# Hetzner Cloud API token (required)
+hcloud_token = "your-hetzner-api-token"
+
+# Domain configuration
+domain      = "gitlab.example.com"
+admin_email = "admin@example.com"
+
+# Location (fsn1 = Falkenstein, nbg1 = Nuremberg, hel1 = Helsinki)
+location = "fsn1"
+
+# SSH public keys for admin access
+ssh_public_keys = {
+  "admin1" = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... admin@example.com"
+  # Add more admin keys as needed
+}
+
+# Trusted IPs for SSH access to admin bot (CIDR notation)
+# Leave empty to allow from anywhere (not recommended)
+trusted_ssh_ips = [
+  "1.2.3.4/32",  # Office IP
+  "5.6.7.8/32",  # VPN IP
+]
+
+# Storage Box configuration (for backups)
+storage_box_host = "uXXXXX.your-storagebox.de"
+storage_box_user = "uXXXXX"
+
+# Server types (adjust for your team size and workload)
+# GitLab server options:
+#   - cx31:  2 vCPU, 8 GB RAM  (~8 EUR/mo)  - Small teams (5-10 devs)
+#   - cpx31: 4 vCPU, 16 GB RAM (~18 EUR/mo) - Medium teams (10-20 devs) [DEFAULT]
+#   - cpx41: 8 vCPU, 32 GB RAM (~35 EUR/mo) - Large teams (20-50 devs)
+gitlab_server_type    = "cpx31"
+
+# Admin Bot server options:
+#   - cx22: 2 vCPU, 4 GB RAM (~4 EUR/mo)  - Minimal (monitoring only)
+#   - cx32: 4 vCPU, 8 GB RAM (~7 EUR/mo)  - Standard [DEFAULT]
+admin_bot_server_type = "cx32"
+
+# Storage sizes
+gitlab_data_volume_size   = 200  # GB
+gitlab_backup_volume_size = 100  # GB
+
+# Tags
+common_labels = {
+  project    = "acme-gitlab"
+  managed_by = "terraform"
+  env        = "prod"
+}

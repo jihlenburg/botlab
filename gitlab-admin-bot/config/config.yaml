@@ -1,0 +1,74 @@
+# GitLab Admin Bot Configuration
+# ================================
+# This is a template - copy to config.yaml and fill in values
+# Environment variables (ADMIN_BOT_*) override these settings
+
+# Application settings
+app_name: "GitLab Admin Bot"
+debug: false
+log_level: "INFO"
+
+# API server
+api_host: "0.0.0.0"
+api_port: 8080
+
+# Data storage
+data_dir: "/opt/gitlab-admin-bot/data"
+db_path: "/opt/gitlab-admin-bot/data/admin_bot.db"
+
+# GitLab connection
+gitlab:
+  url: "https://gitlab.example.com"
+  # private_token: Set via ADMIN_BOT_GITLAB__PRIVATE_TOKEN env var
+  ssh_host: "10.0.1.10"
+  ssh_user: "gitlab-admin"
+  ssh_key_path: "/root/.ssh/admin_bot_key"
+
+# Hetzner Cloud (for restore testing and recovery)
+hetzner:
+  # api_token: Set via ADMIN_BOT_HETZNER__API_TOKEN env var
+  location: "fsn1"
+
+# Backup settings
+backup:
+  borg_repo: "ssh://uXXXXX@uXXXXX.your-storagebox.de:23/./gitlab-borg"
+  # borg_passphrase: Set via ADMIN_BOT_BACKUP__BORG_PASSPHRASE env var
+  local_backup_path: "/var/opt/gitlab/backups"
+  max_backup_age_hours: 4
+
+# Alerting
+alerting:
+  email_enabled: true
+  email_smtp_host: "smtp.office365.com"
+  email_smtp_port: 587
+  email_smtp_user: "gitlab-noreply@example.com"
+  # email_smtp_password: Set via ADMIN_BOT_ALERTING__EMAIL_SMTP_PASSWORD env var
+  email_from: "gitlab-admin-bot@example.com"
+  email_recipients:
+    - "admin@example.com"
+    - "oncall@example.com"
+
+  webhook_enabled: false
+  webhook_url: ""
+
+  cooldown_minutes: 60
+
+# Claude AI settings (for intelligent admin decisions)
+claude:
+  enabled: true
+  # api_key: Set via ADMIN_BOT_CLAUDE__API_KEY env var
+  model: "claude-sonnet-4-20250514"
+  max_tokens: 4096
+  analysis_interval_minutes: 30
+
+# Monitoring thresholds
+monitoring:
+  disk_warning_percent: 80
+  disk_critical_percent: 90
+  memory_warning_percent: 80
+  memory_critical_percent: 95
+  cpu_warning_percent: 70
+  cpu_critical_percent: 90
+  health_check_interval_seconds: 30
+  resource_check_interval_seconds: 60
+  backup_check_interval_minutes: 15

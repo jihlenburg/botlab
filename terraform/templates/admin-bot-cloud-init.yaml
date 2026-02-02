@@ -1,0 +1,174 @@
+#cloud-config
+# Admin Bot Server Cloud-Init Configuration
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - python3.12
+  - python3.12-venv
+  - python3-pip
+  - git
+  - curl
+  - jq
+  - htop
+  - borgbackup
+  - prometheus
+  - prometheus-node-exporter
+  - docker.io
+  - docker-compose
+  - fail2ban
+
+runcmd:
+  # Enable Docker
+  - systemctl enable docker
+  - systemctl start docker
+
+  # Create admin bot directory
+  - mkdir -p /opt/gitlab-admin-bot
+  - mkdir -p /opt/gitlab-admin-bot/data
+  - mkdir -p /opt/gitlab-admin-bot/logs
+
+  # Set up SSH key for GitLab access
+  - mkdir -p /root/.ssh
+  - chmod 700 /root/.ssh
+
+  # Configure SSH for GitLab server access
+  - |
+    cat > /root/.ssh/config << 'SSHEOF'
+    Host gitlab-internal
+      HostName ${gitlab_private_ip}
+      User gitlab-admin
+      IdentityFile /root/.ssh/admin_bot_key
+      StrictHostKeyChecking accept-new
+    SSHEOF
+  - chmod 600 /root/.ssh/config
+
+  # Enable and configure fail2ban
+  - systemctl enable fail2ban
+  - systemctl start fail2ban
+
+  # Configure Prometheus
+  - systemctl enable prometheus
+  - systemctl enable prometheus-node-exporter
+
+write_files:
+  # Admin bot SSH private key
+  - path: /root/.ssh/admin_bot_key
+    permissions: '0600'
+    content: |
+      ${indent(6, admin_bot_private_key)}
+
+  # Prometheus configuration
+  - path: /etc/prometheus/prometheus.yml
+    permissions: '0644'
+    content: |
+      global:
+        scrape_interval: 15s
+        evaluation_interval: 15s
+
+      alerting:
+        alertmanagers:
+          - static_configs:
+              - targets: []
+
+      rule_files:
+        - /etc/prometheus/rules/*.yml
+
+      scrape_configs:
+        - job_name: 'prometheus'
+          static_configs:
+            - targets: ['localhost:9090']
+
+        - job_name: 'node-exporter'
+          static_configs:
+            - targets: ['localhost:9100']
+
+        - job_name: 'gitlab-health'
+          metrics_path: /-/metrics
+          scheme: http
+          static_configs:
+            - targets: ['${gitlab_private_ip}']
+
+        - job_name: 'gitlab-node'
+          static_configs:
+            - targets: ['${gitlab_private_ip}:9100']
+
+  # Prometheus alert rules
+  - path: /etc/prometheus/rules/gitlab.yml
+    permissions: '0644'
+    content: |
+      groups:
+        - name: gitlab
+          rules:
+            - alert: GitLabDown
+              expr: up{job="gitlab-health"} == 0
+              for: 2m
+              labels:
+                severity: critical
+              annotations:
+                summary: "GitLab is down"
+                description: "GitLab health check has been failing for more than 2 minutes."
+
+            - alert: DiskSpaceLow
+              expr: (node_filesystem_avail_bytes{mountpoint="/var/opt/gitlab"} / node_filesystem_size_bytes{mountpoint="/var/opt/gitlab"}) < 0.1
+              for: 5m
+              labels:
+                severity: critical
+              annotations:
+                summary: "GitLab disk space critical"
+                description: "Less than 10% disk space remaining on GitLab data volume."
+
+            - alert: DiskSpaceWarning
+              expr: (node_filesystem_avail_bytes{mountpoint="/var/opt/gitlab"} / node_filesystem_size_bytes{mountpoint="/var/opt/gitlab"}) < 0.2
+              for: 10m
+              labels:
+                severity: warning
+              annotations:
+                summary: "GitLab disk space low"
+                description: "Less than 20% disk space remaining on GitLab data volume."
+
+            - alert: HighMemoryUsage
+              expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) > 0.95
+              for: 5m
+              labels:
+                severity: critical
+              annotations:
+                summary: "High memory usage"
+                description: "Memory usage is above 95% for more than 5 minutes."
+
+  # Admin bot systemd service
+  - path: /etc/systemd/system/gitlab-admin-bot.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=GitLab Admin Bot
+      After=network.target docker.service
+      Requires=docker.service
+
+      [Service]
+      Type=simple
+      WorkingDirectory=/opt/gitlab-admin-bot
+      ExecStart=/opt/gitlab-admin-bot/.venv/bin/python -m src.main
+      Restart=always
+      RestartSec=10
+      User=root
+      Environment=PYTHONUNBUFFERED=1
+
+      [Install]
+      WantedBy=multi-user.target
+
+  # Fail2ban SSH configuration
+  - path: /etc/fail2ban/jail.d/sshd.conf
+    permissions: '0644'
+    content: |
+      [sshd]
+      enabled = true
+      port = ssh
+      filter = sshd
+      logpath = /var/log/auth.log
+      maxretry = 3
+      findtime = 600
+      bantime = 3600
+
+final_message: "Admin Bot server provisioned in $UPTIME seconds"

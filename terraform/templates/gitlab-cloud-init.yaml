@@ -1,0 +1,211 @@
+#cloud-config
+# GitLab Primary Server Cloud-Init Configuration
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - curl
+  - openssh-server
+  - ca-certificates
+  - tzdata
+  - perl
+  - postfix
+  - borgbackup
+  - jq
+  - htop
+  - fail2ban
+
+# Create necessary directories
+runcmd:
+  # Wait for volumes to be attached
+  - sleep 30
+
+  # Format and mount data volume if not already formatted
+  - |
+    DATA_DEVICE="/dev/disk/by-id/scsi-0HC_Volume_${data_volume_id}"
+    if ! blkid "$DATA_DEVICE" | grep -q ext4; then
+      mkfs.ext4 -L gitlab-data "$DATA_DEVICE"
+    fi
+    mkdir -p /var/opt/gitlab
+    echo "$DATA_DEVICE /var/opt/gitlab ext4 defaults,nofail 0 2" >> /etc/fstab
+    mount /var/opt/gitlab
+
+  # Format and mount backup volume
+  - |
+    BACKUP_DEVICE="/dev/disk/by-id/scsi-0HC_Volume_${backup_volume_id}"
+    if ! blkid "$BACKUP_DEVICE" | grep -q ext4; then
+      mkfs.ext4 -L gitlab-backups "$BACKUP_DEVICE"
+    fi
+    mkdir -p /var/opt/gitlab/backups
+    echo "$BACKUP_DEVICE /var/opt/gitlab/backups ext4 defaults,nofail 0 2" >> /etc/fstab
+    mount /var/opt/gitlab/backups
+
+  # Install GitLab CE
+  - curl https://packages.gitlab.com/install/repositories/gitlab/gitlab-ce/script.deb.sh | bash
+  - EXTERNAL_URL="https://${gitlab_domain}" apt-get install -y gitlab-ce
+
+  # Create admin bot restricted SSH configuration
+  - |
+    mkdir -p /home/gitlab-admin/.ssh
+    echo 'command="/usr/local/bin/gitlab-admin-wrapper.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding ${admin_bot_public_key}' > /home/gitlab-admin/.ssh/authorized_keys
+    chmod 700 /home/gitlab-admin/.ssh
+    chmod 600 /home/gitlab-admin/.ssh/authorized_keys
+
+  # Enable and configure fail2ban
+  - systemctl enable fail2ban
+  - systemctl start fail2ban
+
+  # Set secure permissions
+  - chmod 600 /etc/gitlab/gitlab.rb
+  - chmod 600 /etc/gitlab/gitlab-secrets.json
+
+# Create gitlab-admin user for bot access
+users:
+  - name: gitlab-admin
+    groups: sudo
+    shell: /bin/bash
+    sudo: ['ALL=(ALL) NOPASSWD:/usr/bin/gitlab-ctl status, /usr/bin/gitlab-ctl tail *, /usr/bin/gitlab-backup create *, /usr/bin/gitlab-rake gitlab:check *']
+
+write_files:
+  # Admin wrapper script for restricted SSH commands
+  - path: /usr/local/bin/gitlab-admin-wrapper.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      # Restricted command wrapper for GitLab admin bot
+      # Only allows specific safe commands
+
+      set -euo pipefail
+
+      ALLOWED_COMMANDS=(
+        "gitlab-ctl status"
+        "gitlab-ctl tail"
+        "gitlab-backup create"
+        "gitlab-rake gitlab:check"
+        "cat /var/opt/gitlab/backups"
+        "ls /var/opt/gitlab/backups"
+        "df -h"
+        "free -m"
+        "uptime"
+        "curl -s http://localhost/-/health"
+        "curl -s http://localhost/-/readiness"
+        "curl -s http://localhost/-/liveness"
+      )
+
+      # Get the command from SSH_ORIGINAL_COMMAND
+      CMD="$${SSH_ORIGINAL_COMMAND:-}"
+
+      if [[ -z "$$CMD" ]]; then
+        echo "Error: No command specified"
+        exit 1
+      fi
+
+      # Check if command is allowed
+      ALLOWED=false
+      for allowed_cmd in "$${ALLOWED_COMMANDS[@]}"; do
+        if [[ "$$CMD" == "$$allowed_cmd"* ]]; then
+          ALLOWED=true
+          break
+        fi
+      done
+
+      if [[ "$$ALLOWED" == "true" ]]; then
+        eval "$$CMD"
+      else
+        echo "Error: Command not allowed"
+        echo "Allowed commands: $${ALLOWED_COMMANDS[*]}"
+        exit 1
+      fi
+
+  # GitLab backup script
+  - path: /usr/local/bin/gitlab-backup-to-borg.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      # GitLab backup script with BorgBackup
+      # Run hourly via cron
+
+      set -euo pipefail
+
+      LOG_FILE="/var/log/gitlab-backup.log"
+      BACKUP_DIR="/var/opt/gitlab/backups"
+
+      # Source Borg configuration
+      if [[ -f /etc/gitlab-backup.conf ]]; then
+        source /etc/gitlab-backup.conf
+      else
+        echo "$(date): ERROR - /etc/gitlab-backup.conf not found" >> "$$LOG_FILE"
+        exit 1
+      fi
+
+      echo "$(date): Starting GitLab backup" >> "$$LOG_FILE"
+
+      # Create GitLab backup (skip artifacts/LFS as they're in object storage)
+      gitlab-backup create STRATEGY=copy SKIP=artifacts,lfs >> "$$LOG_FILE" 2>&1
+
+      # Find the latest backup file
+      LATEST_BACKUP=$(ls -t "$$BACKUP_DIR"/*_gitlab_backup.tar 2>/dev/null | head -1)
+
+      if [[ -z "$$LATEST_BACKUP" ]]; then
+        echo "$(date): ERROR - No backup file found" >> "$$LOG_FILE"
+        exit 1
+      fi
+
+      echo "$(date): Sending backup to Borg repository" >> "$$LOG_FILE"
+
+      # Send to BorgBackup
+      borg create --stats --compression zstd \
+        "$${BORG_REPO}::{hostname}-{now:%Y-%m-%d_%H:%M}" \
+        "$$LATEST_BACKUP" \
+        /etc/gitlab/gitlab.rb \
+        /etc/gitlab/gitlab-secrets.json \
+        >> "$$LOG_FILE" 2>&1
+
+      # Prune old backups (keep hourly for 24h, daily for 7d, weekly for 4w, monthly for 6m)
+      borg prune --keep-hourly=24 --keep-daily=7 --keep-weekly=4 --keep-monthly=6 \
+        "$$BORG_REPO" >> "$$LOG_FILE" 2>&1
+
+      # Clean local backups older than 24 hours
+      find "$$BACKUP_DIR" -name "*_gitlab_backup.tar" -mtime +1 -delete
+
+      echo "$(date): Backup completed successfully" >> "$$LOG_FILE"
+
+  # Borg configuration template (to be filled in manually)
+  - path: /etc/gitlab-backup.conf.template
+    permissions: '0600'
+    content: |
+      # BorgBackup configuration
+      # Copy this to /etc/gitlab-backup.conf and fill in values
+      export BORG_REPO="ssh://uXXXXX@uXXXXX.your-storagebox.de:23/./gitlab-borg"
+      export BORG_PASSPHRASE="<your-secure-passphrase>"
+      export BORG_RSH="ssh -i /root/.ssh/storagebox_key -o StrictHostKeyChecking=accept-new"
+
+  # Cron job for hourly backups
+  - path: /etc/cron.d/gitlab-backup
+    permissions: '0644'
+    content: |
+      # GitLab backup - runs hourly
+      0 * * * * root /usr/local/bin/gitlab-backup-to-borg.sh
+
+  # Fail2ban GitLab configuration
+  - path: /etc/fail2ban/jail.d/gitlab.conf
+    permissions: '0644'
+    content: |
+      [gitlab]
+      enabled = true
+      port = http,https
+      filter = gitlab
+      logpath = /var/log/gitlab/gitlab-rails/application.log
+      maxretry = 10
+      findtime = 600
+      bantime = 3600
+
+  - path: /etc/fail2ban/filter.d/gitlab.conf
+    permissions: '0644'
+    content: |
+      [Definition]
+      failregex = Failed Login: username=.* ip=<HOST>
+      ignoreregex =
+
+final_message: "GitLab server provisioned in $UPTIME seconds"

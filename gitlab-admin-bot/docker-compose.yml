@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  admin-bot:
+    build: .
+    container_name: gitlab-admin-bot
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config:/app/config:ro
+      - bot-data:/opt/gitlab-admin-bot/data
+      - bot-logs:/opt/gitlab-admin-bot/logs
+      - ${SSH_KEY_PATH:-~/.ssh/admin_bot_key}:/home/adminbot/.ssh/admin_bot_key:ro
+    environment:
+      # Required secrets (set in .env file or environment)
+      - ADMIN_BOT_GITLAB__PRIVATE_TOKEN=${GITLAB_PRIVATE_TOKEN}
+      - ADMIN_BOT_HETZNER__API_TOKEN=${HETZNER_API_TOKEN}
+      - ADMIN_BOT_BACKUP__BORG_PASSPHRASE=${BORG_PASSPHRASE}
+      - ADMIN_BOT_ALERTING__EMAIL_SMTP_PASSWORD=${SMTP_PASSWORD}
+      - ADMIN_BOT_CLAUDE__API_KEY=${CLAUDE_API_KEY}
+      # Optional overrides
+      - ADMIN_BOT_LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - ADMIN_BOT_DEBUG=${DEBUG:-false}
+    networks:
+      - gitlab-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  bot-data:
+  bot-logs:
+
+networks:
+  gitlab-network:
+    driver: bridge
