@@ -52,8 +52,9 @@ class AnalysisResult:
     raw_analysis: str
 
 
-SYSTEM_PROMPT = """You are an expert GitLab system administrator AI assistant for ACME Corp.
-Your role is to analyze system health, resource usage, and backup status to identify issues and recommend actions.
+SYSTEM_PROMPT = """You are an expert GitLab system administrator AI assistant.
+Your role is to analyze system health, resource usage, and backup status to identify
+issues and recommend actions.
 
 You have access to monitoring data from a GitLab CE instance running on Hetzner Cloud.
 The infrastructure consists of:
@@ -146,13 +147,13 @@ class AIAnalyst:
                 messages=[
                     {
                         "role": "user",
-                        "content": f"""Please analyze the current system state and provide recommendations.
-
-Current timestamp: {datetime.now().isoformat()}
-
-{context}
-
-Provide your analysis as JSON.""",
+                        "content": (
+                            f"Please analyze the current system state and provide "
+                            f"recommendations.\n\n"
+                            f"Current timestamp: {datetime.now().isoformat()}\n\n"
+                            f"{context}\n\n"
+                            f"Provide your analysis as JSON."
+                        ),
                     }
                 ],
             )

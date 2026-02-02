@@ -2,17 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
+from src.monitors.backup import BackupMonitor
 from src.monitors.base import CheckResult, Status
 from src.monitors.health import HealthMonitor
 from src.monitors.resources import ResourceMonitor
-from src.monitors.backup import BackupMonitor
-from src.alerting.manager import AlertManager
-from src.config import BackupSettings, MonitoringSettings
 
 
 class TestHealthMonitor:
@@ -232,7 +229,10 @@ class TestBackupMonitor:
 
         mock_ssh_client.run_command.side_effect = [
             # ls output for local backup
-            f"-rw------- 1 root root 5368709120 Jan  1 12:00 /var/opt/gitlab/backups/test_gitlab_backup.tar\n",
+            (
+                "-rw------- 1 root root 5368709120 Jan  1 12:00 "
+                "/var/opt/gitlab/backups/test_gitlab_backup.tar\n"
+            ),
             # stat output for mtime
             f"{recent_time}\n",
             # borg list output
@@ -256,7 +256,10 @@ class TestBackupMonitor:
 
         mock_ssh_client.run_command.side_effect = [
             # ls output for local backup
-            f"-rw------- 1 root root 5368709120 Jan  1 06:00 /var/opt/gitlab/backups/test_gitlab_backup.tar\n",
+            (
+                "-rw------- 1 root root 5368709120 Jan  1 06:00 "
+                "/var/opt/gitlab/backups/test_gitlab_backup.tar\n"
+            ),
             # stat output for mtime (6 hours old)
             f"{old_time}\n",
             # borg list output

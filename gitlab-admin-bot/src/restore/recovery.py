@@ -6,20 +6,16 @@ import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from pathlib import Path
-from typing import Any
 
 import structlog
 from hcloud import Client as HCloudClient
-from hcloud.images import Image
-from hcloud.server_types import ServerType
-from hcloud.locations import Location
-from hcloud.volumes import Volume
-from hcloud.networks import Network
 from hcloud.actions import Action
+from hcloud.images import Image
+from hcloud.locations import Location
+from hcloud.server_types import ServerType
 
-from src.config import HetznerSettings, BackupSettings, GitLabSettings
 from src.alerting.manager import AlertManager
+from src.config import BackupSettings, GitLabSettings, HetznerSettings
 from src.utils.ssh import SSHClient
 
 logger = structlog.get_logger(__name__)
@@ -288,7 +284,7 @@ Please verify and update DNS records.
                     await asyncio.sleep(5)
                     return
 
-            except socket.error:
+            except OSError:
                 pass
 
             elapsed = (datetime.now() - start_time).total_seconds()
@@ -329,8 +325,8 @@ Please verify and update DNS records.
                     old_server_id=volume.server.id,
                 )
 
-                def detach():
-                    return self.hcloud.volumes.detach(volume)
+                def detach(vol=volume):
+                    return self.hcloud.volumes.detach(vol)
 
                 action = await loop.run_in_executor(None, detach)
                 await self._wait_for_action(action)
@@ -338,8 +334,8 @@ Please verify and update DNS records.
             # Attach to recovery server
             logger.info("Attaching volume to recovery server", volume_id=volume.id)
 
-            def attach():
-                return self.hcloud.volumes.attach(volume, server)
+            def attach(vol=volume, srv=server):
+                return self.hcloud.volumes.attach(vol, srv)
 
             action = await loop.run_in_executor(None, attach)
             await self._wait_for_action(action)
@@ -384,10 +380,11 @@ Please verify and update DNS records.
 
             # Add GitLab repository
             logger.info("Adding GitLab repository")
-            await ssh.run_command(
-                "curl -sS https://packages.gitlab.com/install/repositories/gitlab/gitlab-ce/script.deb.sh | bash",
-                timeout=120,
+            repo_script = (
+                "curl -sS https://packages.gitlab.com/install/repositories/"
+                "gitlab/gitlab-ce/script.deb.sh | bash"
             )
+            await ssh.run_command(repo_script, timeout=120)
 
             # Install GitLab CE
             logger.info("Installing GitLab CE (this may take a while)")
@@ -444,10 +441,14 @@ borg extract "$BORG_REPO::{archive_name}" etc/gitlab/
                 timeout=30,
             )
             await ssh.run_command(
-                "cp /tmp/gitlab-restore/etc/gitlab/gitlab-secrets.json /etc/gitlab/gitlab-secrets.json",
+                "cp /tmp/gitlab-restore/etc/gitlab/gitlab-secrets.json "
+                "/etc/gitlab/gitlab-secrets.json",
                 timeout=30,
             )
-            await ssh.run_command("chmod 600 /etc/gitlab/gitlab.rb /etc/gitlab/gitlab-secrets.json", timeout=30)
+            await ssh.run_command(
+                "chmod 600 /etc/gitlab/gitlab.rb /etc/gitlab/gitlab-secrets.json",
+                timeout=30,
+            )
 
             logger.info("Configuration restored")
 
@@ -481,14 +482,18 @@ borg extract "$BORG_REPO::{archive_name}" --pattern '*.tar'
 
             # Find and copy backup file to GitLab backups directory
             logger.info("Copying backup to GitLab backups directory")
-            await ssh.run_command(
+            find_cmd = (
                 "mkdir -p /var/opt/gitlab/backups && "
-                "find /tmp/gitlab-restore -name '*_gitlab_backup.tar' -exec cp {{}} /var/opt/gitlab/backups/ \\;",
-                timeout=300,
+                "find /tmp/gitlab-restore -name '*_gitlab_backup.tar' "
+                "-exec cp {} /var/opt/gitlab/backups/ \\;"
             )
+            await ssh.run_command(find_cmd, timeout=300)
 
             # Get backup timestamp
-            timestamp_cmd = "ls -1 /var/opt/gitlab/backups/*_gitlab_backup.tar | head -1 | xargs basename | sed 's/_gitlab_backup.tar//'"
+            timestamp_cmd = (
+                "ls -1 /var/opt/gitlab/backups/*_gitlab_backup.tar | head -1 | "
+                "xargs basename | sed 's/_gitlab_backup.tar//'"
+            )
             backup_timestamp = (await ssh.run_command(timestamp_cmd, timeout=30)).strip()
 
             if not backup_timestamp:

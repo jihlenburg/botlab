@@ -233,9 +233,11 @@ class TestRestoreTester:
     async def test_provision_test_server(self, restore_tester, mock_hcloud_client):
         """Test provisioning a test server."""
         # Mock SSH waiting
-        with patch.object(restore_tester, "_wait_for_action", new_callable=AsyncMock):
-            with patch.object(restore_tester, "_wait_for_ssh", new_callable=AsyncMock):
-                server = await restore_tester._provision_test_server()
+        with (
+            patch.object(restore_tester, "_wait_for_action", new_callable=AsyncMock),
+            patch.object(restore_tester, "_wait_for_ssh", new_callable=AsyncMock),
+        ):
+            server = await restore_tester._provision_test_server()
 
         assert server is not None
         mock_hcloud_client.servers.create.assert_called_once()
@@ -257,15 +259,17 @@ class TestRestoreTester:
             "1\n",
         ]
 
-        with patch.object(restore_tester, "_get_ssh_client", return_value=mock_ssh_client):
-            with patch("httpx.AsyncClient") as mock_client_class:
-                mock_client = AsyncMock()
-                mock_client.__aenter__.return_value = mock_client
-                mock_client.__aexit__.return_value = None
-                mock_client.get.return_value = MagicMock(status_code=200)
-                mock_client_class.return_value = mock_client
+        with (
+            patch.object(restore_tester, "_get_ssh_client", return_value=mock_ssh_client),
+            patch("httpx.AsyncClient") as mock_client_class,
+        ):
+            mock_client = AsyncMock()
+            mock_client.__aenter__.return_value = mock_client
+            mock_client.__aexit__.return_value = None
+            mock_client.get.return_value = MagicMock(status_code=200)
+            mock_client_class.return_value = mock_client
 
-                results = await restore_tester._verify_restore("10.0.0.1")
+            results = await restore_tester._verify_restore("10.0.0.1")
 
         assert results["services_running"] is True
         assert results["health_check"] is True
@@ -282,15 +286,17 @@ class TestRestoreTester:
             "ERROR: connection refused\n",
         ]
 
-        with patch.object(restore_tester, "_get_ssh_client", return_value=mock_ssh_client):
-            with patch("httpx.AsyncClient") as mock_client_class:
-                mock_client = AsyncMock()
-                mock_client.__aenter__.return_value = mock_client
-                mock_client.__aexit__.return_value = None
-                mock_client.get.return_value = MagicMock(status_code=503)
-                mock_client_class.return_value = mock_client
+        with (
+            patch.object(restore_tester, "_get_ssh_client", return_value=mock_ssh_client),
+            patch("httpx.AsyncClient") as mock_client_class,
+        ):
+            mock_client = AsyncMock()
+            mock_client.__aenter__.return_value = mock_client
+            mock_client.__aexit__.return_value = None
+            mock_client.get.return_value = MagicMock(status_code=503)
+            mock_client_class.return_value = mock_client
 
-                results = await restore_tester._verify_restore("10.0.0.1")
+            results = await restore_tester._verify_restore("10.0.0.1")
 
         assert results["health_check"] is False
 

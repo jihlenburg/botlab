@@ -9,9 +9,9 @@ from typing import Any
 import structlog
 from prometheus_client import Gauge
 
-from src.monitors.base import BaseMonitor, CheckResult, Status, CHECK_DURATION
 from src.alerting.manager import AlertManager
 from src.config import MonitoringSettings
+from src.monitors.base import CHECK_DURATION, BaseMonitor, CheckResult, Status
 from src.utils.ssh import SSHClient
 
 logger = structlog.get_logger(__name__)
@@ -126,7 +126,8 @@ class ResourceMonitor(BaseMonitor):
     async def _check_disk(self) -> dict[str, Any]:
         """Check disk usage."""
         # Run df command via SSH
-        output = await self.ssh.run_command("df -h /var/opt/gitlab /var/opt/gitlab/backups 2>/dev/null || df -h /")
+        df_cmd = "df -h /var/opt/gitlab /var/opt/gitlab/backups 2>/dev/null || df -h /"
+        output = await self.ssh.run_command(df_cmd)
 
         disk_info = {}
         for line in output.strip().split("\n")[1:]:  # Skip header

@@ -9,8 +9,8 @@ import httpx
 import structlog
 from prometheus_client import Gauge
 
-from src.monitors.base import BaseMonitor, CheckResult, Status, CHECK_DURATION
 from src.alerting.manager import AlertManager
+from src.monitors.base import CHECK_DURATION, BaseMonitor, CheckResult, Status
 from src.utils.gitlab_api import GitLabClient
 
 logger = structlog.get_logger(__name__)

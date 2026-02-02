@@ -2,25 +2,24 @@
 
 from __future__ import annotations
 
-import asyncio
 import signal
 import sys
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
 
 import structlog
 import uvicorn
 from fastapi import FastAPI
 from prometheus_client import make_asgi_app
 
+from src.ai.analyst import AIAnalyst
+from src.alerting.manager import AlertManager
 from src.config import get_settings
-from src.scheduler import Scheduler
+from src.maintenance.tasks import MaintenanceRunner
+from src.monitors.backup import BackupMonitor
 from src.monitors.health import HealthMonitor
 from src.monitors.resources import ResourceMonitor
-from src.monitors.backup import BackupMonitor
-from src.alerting.manager import AlertManager
-from src.ai.analyst import AIAnalyst
-from src.maintenance.tasks import MaintenanceRunner
+from src.scheduler import Scheduler
 from src.utils.gitlab_api import GitLabClient
 from src.utils.ssh import SSHClient
 
@@ -230,7 +229,7 @@ class AdminBot:
 
         try:
             # Generate daily status report
-            report = await self.maintenance.generate_daily_report()
+            await self.maintenance.generate_daily_report()
             logger.info("Daily report generated", success=True)
 
             # Rotate logs

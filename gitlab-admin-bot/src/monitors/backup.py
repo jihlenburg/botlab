@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
 import structlog
 from prometheus_client import Gauge
 
-from src.monitors.base import BaseMonitor, CheckResult, Status, CHECK_DURATION
 from src.alerting.manager import AlertManager
 from src.config import BackupSettings
+from src.monitors.base import CHECK_DURATION, BaseMonitor, CheckResult, Status
 from src.utils.ssh import SSHClient
 
 logger = structlog.get_logger(__name__)
@@ -152,7 +152,10 @@ class BackupMonitor(BaseMonitor):
         """Check Borg backup repository."""
         try:
             # List most recent backup
-            cmd = "source /etc/gitlab-backup.conf && borg list --last 1 --format '{archive} {time}' $BORG_REPO 2>&1"
+            cmd = (
+                "source /etc/gitlab-backup.conf && "
+                "borg list --last 1 --format '{archive} {time}' $BORG_REPO 2>&1"
+            )
             output = await self.ssh.run_command(cmd)
 
             if "error" in output.lower() or "warning" in output.lower():

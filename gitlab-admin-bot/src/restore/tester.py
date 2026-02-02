@@ -5,19 +5,17 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
 
 import httpx
 import structlog
 from hcloud import Client as HCloudClient
-from hcloud.images import Image
-from hcloud.server_types import ServerType
-from hcloud.locations import Location
-from hcloud.ssh_keys import SSHKey
 from hcloud.actions import Action
+from hcloud.images import Image
+from hcloud.locations import Location
+from hcloud.server_types import ServerType
 
-from src.config import HetznerSettings, BackupSettings, GitLabSettings
 from src.alerting.manager import AlertManager
+from src.config import BackupSettings, GitLabSettings, HetznerSettings
 from src.utils.ssh import SSHClient
 
 logger = structlog.get_logger(__name__)
@@ -204,7 +202,7 @@ class RestoreTester:
                     await asyncio.sleep(5)  # Give sshd time to fully start
                     return
 
-            except socket.error:
+            except OSError:
                 pass
 
             elapsed = (datetime.now() - start_time).total_seconds()
@@ -250,10 +248,11 @@ class RestoreTester:
 
             # Add GitLab repository
             logger.debug("Adding GitLab repository")
-            await ssh.run_command(
-                "curl -sS https://packages.gitlab.com/install/repositories/gitlab/gitlab-ce/script.deb.sh | bash",
-                timeout=120,
+            repo_script = (
+                "curl -sS https://packages.gitlab.com/install/repositories/"
+                "gitlab/gitlab-ce/script.deb.sh | bash"
             )
+            await ssh.run_command(repo_script, timeout=120)
 
             # Install GitLab CE
             logger.info("Installing GitLab CE package")
@@ -304,23 +303,29 @@ borg extract "$BORG_REPO::{archive_name}"
             # Restore config files
             logger.info("Restoring configuration files")
             await ssh.run_command(
-                "cp /tmp/gitlab-restore/etc/gitlab/gitlab.rb /etc/gitlab/gitlab.rb 2>/dev/null || true",
+                "cp /tmp/gitlab-restore/etc/gitlab/gitlab.rb "
+                "/etc/gitlab/gitlab.rb 2>/dev/null || true",
                 timeout=30,
             )
             await ssh.run_command(
-                "cp /tmp/gitlab-restore/etc/gitlab/gitlab-secrets.json /etc/gitlab/gitlab-secrets.json 2>/dev/null || true",
+                "cp /tmp/gitlab-restore/etc/gitlab/gitlab-secrets.json "
+                "/etc/gitlab/gitlab-secrets.json 2>/dev/null || true",
                 timeout=30,
             )
 
             # Copy backup file
-            await ssh.run_command(
+            find_cmd = (
                 "mkdir -p /var/opt/gitlab/backups && "
-                "find /tmp/gitlab-restore -name '*_gitlab_backup.tar' -exec cp {} /var/opt/gitlab/backups/ \\;",
-                timeout=300,
+                "find /tmp/gitlab-restore -name '*_gitlab_backup.tar' "
+                "-exec cp {} /var/opt/gitlab/backups/ \\;"
             )
+            await ssh.run_command(find_cmd, timeout=300)
 
             # Get backup timestamp
-            timestamp_cmd = "ls -1 /var/opt/gitlab/backups/*_gitlab_backup.tar | head -1 | xargs basename | sed 's/_gitlab_backup.tar//'"
+            timestamp_cmd = (
+                "ls -1 /var/opt/gitlab/backups/*_gitlab_backup.tar | head -1 | "
+                "xargs basename | sed 's/_gitlab_backup.tar//'"
+            )
             backup_timestamp = (await ssh.run_command(timestamp_cmd, timeout=30)).strip()
 
             if not backup_timestamp:
@@ -451,7 +456,7 @@ Verification Results:
             message += f"  - {check}: {'PASS' if passed else 'FAIL'}\n"
 
         if result.errors:
-            message += f"\nErrors:\n"
+            message += "\nErrors:\n"
             for error in result.errors:
                 message += f"  - {error}\n"
 

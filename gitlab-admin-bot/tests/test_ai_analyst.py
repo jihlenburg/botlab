@@ -8,7 +8,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.ai.analyst import AIAnalyst, AnalysisResult, RecommendedAction, Urgency
-from src.config import ClaudeSettings
 
 
 class TestUrgency:
@@ -160,7 +159,7 @@ class TestAIAnalyst:
         sample_backup_status,
     ):
         """Test analysis with additional context."""
-        result = await ai_analyst.analyze_system_state(
+        await ai_analyst.analyze_system_state(
             health=sample_health_status,
             resources=sample_resource_status,
             backup=sample_backup_status,

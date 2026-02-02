@@ -48,7 +48,7 @@ class GitLabClient:
         """Get GitLab health status via API."""
         try:
             # Use the application settings endpoint as a health indicator
-            settings = self.gl.settings.get()
+            self.gl.settings.get()
             return {
                 "healthy": True,
                 "version": self.gl.version(),

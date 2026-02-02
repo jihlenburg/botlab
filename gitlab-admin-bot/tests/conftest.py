@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from typing import Any, AsyncGenerator
-from unittest.mock import AsyncMock, MagicMock, patch
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from pydantic import SecretStr
 
+from src.alerting.manager import AlertManager
 from src.config import (
     AlertingSettings,
     BackupSettings,
@@ -19,7 +20,6 @@ from src.config import (
     MonitoringSettings,
     Settings,
 )
-from src.alerting.manager import AlertManager
 from src.monitors.base import CheckResult, Status
 from src.utils.ssh import SSHClient
 

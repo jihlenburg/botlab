@@ -5,13 +5,13 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from typing import Any
 
 import aiosmtplib
 import httpx
 import structlog
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 from prometheus_client import Counter
 
 from src.config import AlertingSettings

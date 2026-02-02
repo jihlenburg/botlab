@@ -158,7 +158,7 @@ class TestAlertManager:
         # Alert A should be sendable again
         result_a = await alert_manager.send_alert(severity="info", title="Alert A", message="A2")
         # Alert B should still be in cooldown (if it has the same ID pattern)
-        result_b = await alert_manager.send_alert(severity="info", title="Alert B", message="B2")
+        await alert_manager.send_alert(severity="info", title="Alert B", message="B2")
 
         assert result_a is True
 
@@ -190,7 +190,7 @@ class TestAlertManager:
         manager._send_email = AsyncMock()
         manager._send_webhook = AsyncMock()
 
-        result = await manager.send_alert(
+        await manager.send_alert(
             severity="info",
             title="No Email",
             message="Should not send email",

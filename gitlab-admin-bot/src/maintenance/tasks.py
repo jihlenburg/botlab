@@ -7,8 +7,8 @@ from typing import Any
 
 import structlog
 
-from src.utils.ssh import SSHClient
 from src.alerting.manager import AlertManager
+from src.utils.ssh import SSHClient
 
 logger = structlog.get_logger(__name__)
 
