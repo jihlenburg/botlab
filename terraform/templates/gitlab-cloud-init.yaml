@@ -79,18 +79,54 @@ write_files:
       set -euo pipefail
 
       ALLOWED_COMMANDS=(
+        # GitLab control commands
         "gitlab-ctl status"
         "gitlab-ctl tail"
+        "gitlab-ctl stop"
+        "gitlab-ctl start"
+        "gitlab-ctl restart"
+        "gitlab-ctl reconfigure"
+        # Backup commands
         "gitlab-backup create"
+        "gitlab-backup restore"
+        # GitLab rake tasks
         "gitlab-rake gitlab:check"
+        "gitlab-rake gitlab:cleanup"
+        "gitlab-rake gitlab:env:info"
+        # Database commands
+        "gitlab-psql"
+        # File operations for backup monitoring
         "cat /var/opt/gitlab/backups"
         "ls /var/opt/gitlab/backups"
+        "ls -"
+        "stat "
+        "find /var/opt/gitlab"
+        "find /tmp"
+        # System monitoring
         "df -h"
+        "df "
         "free -m"
+        "free "
         "uptime"
+        "nproc"
+        "cat /proc/loadavg"
+        "tail "
+        # Health checks
         "curl -s http://localhost/-/health"
         "curl -s http://localhost/-/readiness"
         "curl -s http://localhost/-/liveness"
+        "curl -sf http://localhost"
+        # Borg backup operations
+        "source /etc/gitlab-backup.conf"
+        "borg list"
+        "borg info"
+        "borg extract"
+        "borg create"
+        "borg prune"
+        # Log operations
+        "logrotate"
+        # Maintenance
+        "gitlab-ctl registry-garbage-collect"
       )
 
       # Get the command from SSH_ORIGINAL_COMMAND

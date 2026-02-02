@@ -164,10 +164,76 @@ borg delete "$TEST_ARCHIVE"
 rm /tmp/borg-test-file.txt
 
 # =============================================================================
-# Step 6: Enable cron job
+# Step 6: Create backup script (if not exists from cloud-init)
 # =============================================================================
 
-log_info "Step 6: Enabling backup cron job..."
+log_info "Step 6: Setting up backup script..."
+
+BACKUP_SCRIPT="/usr/local/bin/gitlab-backup-to-borg.sh"
+
+if [[ ! -f "$BACKUP_SCRIPT" ]]; then
+    log_info "Creating backup script..."
+    cat > "$BACKUP_SCRIPT" << 'SCRIPT_EOF'
+#!/bin/bash
+# GitLab backup script with BorgBackup
+# Run hourly via cron
+
+set -euo pipefail
+
+LOG_FILE="/var/log/gitlab-backup.log"
+BACKUP_DIR="/var/opt/gitlab/backups"
+
+# Source Borg configuration
+if [[ -f /etc/gitlab-backup.conf ]]; then
+    source /etc/gitlab-backup.conf
+else
+    echo "$(date): ERROR - /etc/gitlab-backup.conf not found" >> "$LOG_FILE"
+    exit 1
+fi
+
+echo "$(date): Starting GitLab backup" >> "$LOG_FILE"
+
+# Create GitLab backup (skip artifacts/LFS as they're in object storage)
+gitlab-backup create STRATEGY=copy SKIP=artifacts,lfs >> "$LOG_FILE" 2>&1
+
+# Find the latest backup file
+LATEST_BACKUP=$(ls -t "$BACKUP_DIR"/*_gitlab_backup.tar 2>/dev/null | head -1)
+
+if [[ -z "$LATEST_BACKUP" ]]; then
+    echo "$(date): ERROR - No backup file found" >> "$LOG_FILE"
+    exit 1
+fi
+
+echo "$(date): Sending backup to Borg repository" >> "$LOG_FILE"
+
+# Send to BorgBackup
+borg create --stats --compression zstd \
+    "${BORG_REPO}::{hostname}-{now:%Y-%m-%d_%H:%M}" \
+    "$LATEST_BACKUP" \
+    /etc/gitlab/gitlab.rb \
+    /etc/gitlab/gitlab-secrets.json \
+    >> "$LOG_FILE" 2>&1
+
+# Prune old backups (keep hourly for 24h, daily for 7d, weekly for 4w, monthly for 6m)
+borg prune --keep-hourly=24 --keep-daily=7 --keep-weekly=4 --keep-monthly=6 \
+    "$BORG_REPO" >> "$LOG_FILE" 2>&1
+
+# Clean local backups older than 24 hours
+find "$BACKUP_DIR" -name "*_gitlab_backup.tar" -mtime +1 -delete
+
+echo "$(date): Backup completed successfully" >> "$LOG_FILE"
+SCRIPT_EOF
+    chmod 755 "$BACKUP_SCRIPT"
+    log_info "Backup script created: $BACKUP_SCRIPT"
+else
+    log_info "Backup script already exists (from cloud-init)"
+fi
+
+# =============================================================================
+# Step 7: Enable cron job
+# =============================================================================
+
+log_info "Step 7: Enabling backup cron job..."
 
 cat > /etc/cron.d/gitlab-backup << 'EOF'
 # GitLab backup - runs hourly at minute 0
@@ -177,6 +243,19 @@ EOF
 chmod 644 /etc/cron.d/gitlab-backup
 
 log_info "Cron job enabled (hourly backups)"
+
+# =============================================================================
+# Step 8: Run initial backup test
+# =============================================================================
+
+log_info "Step 8: Running initial backup verification..."
+
+# Verify the backup script works
+if "$BACKUP_SCRIPT" --help 2>&1 | grep -q "gitlab-backup" || bash -n "$BACKUP_SCRIPT"; then
+    log_info "Backup script syntax OK"
+else
+    log_warn "Backup script may have issues - check manually"
+fi
 
 # =============================================================================
 # Complete
@@ -203,4 +282,7 @@ echo "  /usr/local/bin/gitlab-backup-to-borg.sh"
 echo ""
 echo "To list backups:"
 echo "  source /etc/gitlab-backup.conf && borg list \$BORG_REPO"
+echo ""
+echo "To verify backups:"
+echo "  /path/to/scripts/verify-backup.sh"
 echo ""

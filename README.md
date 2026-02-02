@@ -100,6 +100,7 @@ docker compose up -d
 botlab/
 ├── README.md                    # This file
 ├── CLAUDE.md                    # AI assistant guidance
+├── TODO.md                      # Implementation status and task tracking
 ├── docs/
 │   ├── DESIGN.md                # Master design document
 │   ├── SECURITY-ASSESSMENT.md   # Security & DR analysis
@@ -115,7 +116,9 @@ botlab/
 │   ├── firewalls.tf             # Firewall rules
 │   ├── ssh_keys.tf              # SSH key management
 │   ├── outputs.tf               # Output values
+│   ├── terraform.tfvars.example # Configuration template
 │   └── templates/               # Cloud-init templates
+│       └── gitlab-cloud-init.yaml
 ├── gitlab-admin-bot/            # AI-powered admin bot
 │   ├── src/
 │   │   ├── main.py              # Entry point
@@ -127,15 +130,23 @@ botlab/
 │   │   ├── maintenance/         # Maintenance tasks
 │   │   ├── restore/             # DR automation
 │   │   └── utils/               # SSH, GitLab API clients
+│   ├── tests/                   # Test suite
+│   │   ├── conftest.py          # Shared fixtures
+│   │   ├── test_monitors.py     # Monitor tests
+│   │   ├── test_alerting.py     # Alert manager tests
+│   │   ├── test_ai_analyst.py   # AI integration tests
+│   │   └── test_recovery.py     # Recovery tests
 │   ├── config/config.yaml       # Configuration template
 │   ├── Dockerfile
 │   └── docker-compose.yml
-└── scripts/                     # Utility scripts
-    ├── gitlab-setup.sh          # GitLab installation
-    ├── gitlab.rb.template       # GitLab configuration
-    ├── setup-borg-backup.sh     # Backup setup
-    ├── verify-backup.sh         # Backup verification
-    └── restore-gitlab.sh        # DR restore procedure
+├── scripts/                     # Utility scripts
+│   ├── gitlab-setup.sh          # GitLab installation
+│   ├── gitlab.rb.template       # GitLab configuration
+│   ├── setup-borg-backup.sh     # Backup setup (interactive)
+│   ├── verify-backup.sh         # Backup verification (--json, --quiet)
+│   └── restore-gitlab.sh        # DR restore procedure
+└── .github/workflows/           # CI/CD
+    └── test.yml                 # pytest, ruff, mypy, shellcheck, terraform
 ```
 
 ## Disaster Recovery

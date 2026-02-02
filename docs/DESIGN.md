@@ -840,13 +840,21 @@ gitlab-admin-bot/
 │   │   ├── tester.py           # Automated restore testing
 │   │   ├── recovery.py         # DR recovery automation
 │   │   └── hetzner.py          # VM provisioning
+│   ├── ai/
+│   │   ├── __init__.py
+│   │   └── analyst.py          # Claude API integration
 │   └── utils/
 │       ├── __init__.py
 │       ├── gitlab_api.py       # python-gitlab wrapper
 │       ├── ssh.py              # SSH command execution
 │       └── metrics.py          # Prometheus metrics export
 ├── tests/
-│   └── ...
+│   ├── __init__.py
+│   ├── conftest.py             # Shared fixtures and mocks
+│   ├── test_monitors.py        # Monitor unit tests
+│   ├── test_alerting.py        # Alert manager tests
+│   ├── test_ai_analyst.py      # AI analyst tests
+│   └── test_recovery.py        # Recovery automation tests
 └── scripts/
     ├── install.sh
     └── gitlab-admin-wrapper.sh
@@ -1045,14 +1053,30 @@ Projects without `.gitlab-bot.yml` receive conservative defaults:
 
 ```bash
 # SSH restricted commands via authorized_keys
-command="/usr/local/bin/gitlab-admin-wrapper.sh",no-port-forwarding,no-X11-forwarding ssh-ed25519 AAAA... admin-bot
+command="/usr/local/bin/gitlab-admin-wrapper.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding ssh-ed25519 AAAA... admin-bot
 ```
 
-**Wrapper script allows only:**
-- `gitlab-ctl status`
-- `gitlab-backup create`
-- `gitlab-rake gitlab:check`
-- Health check endpoints
+**Wrapper script (`/usr/local/bin/gitlab-admin-wrapper.sh`) allows only:**
+
+| Category | Commands |
+|----------|----------|
+| GitLab Control | `gitlab-ctl status/stop/start/restart/reconfigure` |
+| Backup Operations | `gitlab-backup create/restore` |
+| GitLab Rake Tasks | `gitlab-rake gitlab:check/cleanup/env:info` |
+| Database | `gitlab-psql` (read-only queries) |
+| File Operations | `cat/ls/stat/find` on `/var/opt/gitlab/backups` and `/tmp` only |
+| System Monitoring | `df`, `free`, `uptime`, `nproc`, `cat /proc/loadavg`, `tail` |
+| Health Checks | `curl -s http://localhost/-/health/-/readiness/-/liveness` |
+| Borg Backup | `borg list/info/extract/create/prune` |
+| Maintenance | `gitlab-ctl registry-garbage-collect`, `logrotate` |
+
+**Implementation**: See `terraform/templates/gitlab-cloud-init.yaml` for the full wrapper script with the complete `ALLOWED_COMMANDS` array.
+
+**Security Notes:**
+- Commands are prefix-matched, not exact-matched (allows arguments)
+- All other commands are rejected with explicit error message
+- SSH agent forwarding, port forwarding, and X11 forwarding disabled
+- Wrapper logs all command attempts to syslog
 
 ---
 

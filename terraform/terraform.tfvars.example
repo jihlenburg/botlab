@@ -1,54 +1,128 @@
 # =============================================================================
-# Example Terraform Variables
+# GitLab Infrastructure - Terraform Variables
 # =============================================================================
 # Copy this file to terraform.tfvars and fill in your values
+# NEVER commit terraform.tfvars to version control - it contains secrets
+#
+# Usage:
+#   cp terraform.tfvars.example terraform.tfvars
+#   # Edit terraform.tfvars with your values
+#   terraform init
+#   terraform plan
+#   terraform apply
 
-# Hetzner Cloud API token (required)
-hcloud_token = "your-hetzner-api-token"
+# =============================================================================
+# Required: Hetzner Cloud API Token
+# =============================================================================
+# Get this from: https://console.hetzner.cloud/
+#   Project -> Security -> API Tokens -> Generate API Token
+# Required permissions: Read & Write
 
-# Domain configuration
-domain      = "gitlab.example.com"
-admin_email = "admin@example.com"
+hcloud_token = "your-hetzner-cloud-api-token-here"
 
-# Location (fsn1 = Falkenstein, nbg1 = Nuremberg, hel1 = Helsinki)
-location = "fsn1"
+# =============================================================================
+# Required: Domain Configuration
+# =============================================================================
+# The domain where GitLab will be accessible
+# After deployment, configure DNS to point this domain to the load balancer IP
+# (The load balancer IP is shown in terraform output)
 
-# SSH public keys for admin access
+domain      = "gitlab.yourcompany.com"
+admin_email = "admin@yourcompany.com"
+
+# =============================================================================
+# Required: SSH Access Configuration
+# =============================================================================
+# SSH public keys for admin access to servers
+# Format: map of name => public key content
+# Generate with: ssh-keygen -t ed25519 -C "your@email.com"
+
 ssh_public_keys = {
-  "admin1" = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... admin@example.com"
-  # Add more admin keys as needed
+  "admin-alice" = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... alice@example.com"
+  "admin-bob"   = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... bob@example.com"
 }
 
-# Trusted IPs for SSH access to admin bot (CIDR notation)
-# Leave empty to allow from anywhere (not recommended)
+# IP addresses allowed to SSH to the admin bot server (CIDR notation)
+# For security, restrict to your office/VPN IPs
+# Empty list allows SSH from anywhere (NOT recommended for production)
+
 trusted_ssh_ips = [
-  "1.2.3.4/32",  # Office IP
-  "5.6.7.8/32",  # VPN IP
+  "203.0.113.10/32",   # Example: Office IP
+  "198.51.100.0/24",   # Example: VPN range
 ]
 
-# Storage Box configuration (for backups)
+# =============================================================================
+# Required: Storage Box Configuration (for BorgBackup)
+# =============================================================================
+# Order a Storage Box from Hetzner Robot: https://robot.hetzner.com/storage
+# Recommended: BX21 (1TB) or larger for GitLab backups
+# Note: SSH key setup is done manually after terraform apply using setup-borg-backup.sh
+
 storage_box_host = "uXXXXX.your-storagebox.de"
 storage_box_user = "uXXXXX"
 
-# Server types (adjust for your team size and workload)
+# =============================================================================
+# Server Configuration
+# =============================================================================
+# Server types - adjust based on team size and workload
+#
 # GitLab server options:
-#   - cx31:  2 vCPU, 8 GB RAM  (~8 EUR/mo)  - Small teams (5-10 devs)
-#   - cpx31: 4 vCPU, 16 GB RAM (~18 EUR/mo) - Medium teams (10-20 devs) [DEFAULT]
-#   - cpx41: 8 vCPU, 32 GB RAM (~35 EUR/mo) - Large teams (20-50 devs)
-gitlab_server_type    = "cpx31"
-
+#   cx31:  2 vCPU,  8 GB RAM (~8 EUR/mo)  - Small teams (5-10 devs)
+#   cpx31: 4 vCPU, 16 GB RAM (~18 EUR/mo) - Medium teams (10-25 devs) [RECOMMENDED]
+#   cpx41: 8 vCPU, 32 GB RAM (~35 EUR/mo) - Large teams (25-50 devs)
+#   cpx51: 16 vCPU, 64 GB RAM (~70 EUR/mo) - Enterprise (50+ devs)
+#
 # Admin Bot server options:
-#   - cx22: 2 vCPU, 4 GB RAM (~4 EUR/mo)  - Minimal (monitoring only)
-#   - cx32: 4 vCPU, 8 GB RAM (~7 EUR/mo)  - Standard [DEFAULT]
+#   cx22: 2 vCPU, 4 GB RAM (~4 EUR/mo)  - Minimal (monitoring only)
+#   cx32: 4 vCPU, 8 GB RAM (~7 EUR/mo)  - Standard with AI analysis [RECOMMENDED]
+
+gitlab_server_type    = "cpx31"
 admin_bot_server_type = "cx32"
 
-# Storage sizes
-gitlab_data_volume_size   = 200  # GB
-gitlab_backup_volume_size = 100  # GB
+# OS image (Ubuntu 24.04 LTS recommended for long-term support)
+server_image = "ubuntu-24.04"
 
-# Tags
+# Datacenter location
+#   fsn1 = Falkenstein, Germany (recommended - best network)
+#   nbg1 = Nuremberg, Germany
+#   hel1 = Helsinki, Finland
+location = "fsn1"
+
+# =============================================================================
+# Storage Configuration
+# =============================================================================
+# Volume sizes in GB
+# GitLab data: stores repositories, uploads, container registry, etc.
+# Backup staging: temporary storage before sending to Borg (needs space for 1 full backup)
+
+gitlab_data_volume_size   = 200  # Increase based on expected repository sizes
+gitlab_backup_volume_size = 100  # Should be >= largest expected backup
+
+# =============================================================================
+# Network Configuration (Advanced)
+# =============================================================================
+# Usually no changes needed - defaults work for most deployments
+
+# Private network CIDR
+network_cidr = "10.0.0.0/16"
+
+# Subnet CIDR
+subnet_cidr = "10.0.1.0/24"
+
+# Server private IPs (within subnet)
+gitlab_private_ip    = "10.0.1.10"
+admin_bot_private_ip = "10.0.1.30"
+
+# =============================================================================
+# Resource Labels
+# =============================================================================
+# Labels applied to all Hetzner resources for organization and billing
+
 common_labels = {
   project    = "acme-gitlab"
   managed_by = "terraform"
   env        = "prod"
 }
+
+# Environment name
+environment = "prod"

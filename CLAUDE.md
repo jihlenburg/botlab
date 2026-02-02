@@ -77,17 +77,32 @@ See DESIGN.md Section 7.8 and INTEGRATOR-BOT-PLAN.md Section 7 for full specific
 botlab/
 ├── CLAUDE.md                       # This file (AI assistant guidance)
 ├── README.md                       # Project overview and quick start
+├── TODO.md                         # Implementation status and task tracking
 ├── docs/
 │   ├── DESIGN.md                   # Master design document (READ FIRST)
 │   ├── SECURITY-ASSESSMENT.md      # Security & ransomware analysis
 │   └── INTEGRATOR-BOT-PLAN.md      # Claude Code CLI bot architecture
 ├── terraform/                      # Infrastructure as code
-│   └── *.tf                        # Hetzner Cloud resources
+│   ├── *.tf                        # Hetzner Cloud resources
+│   ├── terraform.tfvars.example    # Example configuration (copy to terraform.tfvars)
+│   └── templates/                  # Cloud-init templates
 ├── gitlab-admin-bot/               # Admin bot Python project
 │   ├── src/                        # Source code
+│   │   ├── monitors/               # Health, resource, backup monitors
+│   │   ├── alerting/               # Alert management
+│   │   ├── restore/                # DR recovery automation
+│   │   ├── maintenance/            # Maintenance tasks
+│   │   ├── ai/                     # Claude API integration
+│   │   └── utils/                  # SSH, GitLab API clients
+│   ├── tests/                      # Test suite (pytest)
 │   ├── config/                     # Configuration templates
 │   └── scripts/                    # Installation scripts
-└── scripts/                        # Deployment and maintenance scripts
+├── scripts/                        # Deployment and maintenance scripts
+│   ├── setup-borg-backup.sh        # BorgBackup setup
+│   ├── restore-gitlab.sh           # DR restore procedure
+│   └── verify-backup.sh            # Backup verification
+└── .github/workflows/              # CI/CD pipeline
+    └── test.yml                    # pytest, ruff, mypy, shellcheck, terraform
 ```
 
 ## Development Commands
@@ -143,6 +158,37 @@ docker compose up -d
 | `docs/SECURITY-ASSESSMENT.md` | Security analysis and recommendations |
 | `docs/INTEGRATOR-BOT-PLAN.md` | Integrator Bot architecture plan |
 | `terraform/*.tf` | Infrastructure definitions |
+| `terraform/terraform.tfvars.example` | Configuration template with documentation |
+| `terraform/templates/gitlab-cloud-init.yaml` | Server bootstrap configuration |
 | `gitlab-admin-bot/src/main.py` | Bot entry point |
 | `gitlab-admin-bot/config/config.yaml` | Bot configuration |
+| `scripts/setup-borg-backup.sh` | BorgBackup initialization |
+| `scripts/restore-gitlab.sh` | Disaster recovery procedure |
+| `TODO.md` | Implementation status and task tracking |
 | `.gitlab-bot.yml` (per-project) | Project-specific bot policies |
+
+## Documentation Maintenance
+
+**IMPORTANT: Keep documentation in sync with implementation.**
+
+When making changes to this project, update the relevant documentation:
+
+| Change Type | Documents to Update |
+|-------------|---------------------|
+| Architecture changes | `docs/DESIGN.md` (authoritative), then `README.md` |
+| Security changes | `docs/SECURITY-ASSESSMENT.md`, `docs/DESIGN.md` Section 8-9 |
+| SSH wrapper commands | `terraform/templates/gitlab-cloud-init.yaml`, `docs/DESIGN.md` Section 8.5 |
+| New scripts | `README.md` Project Structure, `TODO.md` if applicable |
+| Terraform changes | `terraform/terraform.tfvars.example`, `docs/DESIGN.md` Section 4 |
+| Bot features | `docs/DESIGN.md` Section 7, `docs/INTEGRATOR-BOT-PLAN.md` |
+| Test changes | `.github/workflows/test.yml`, `TODO.md` |
+
+**Documentation hierarchy** (most authoritative first):
+1. `docs/DESIGN.md` - Master specification
+2. `docs/SECURITY-ASSESSMENT.md` - Security requirements
+3. `docs/INTEGRATOR-BOT-PLAN.md` - Bot architecture
+4. `README.md` - User-facing overview
+5. `CLAUDE.md` - AI assistant guidance
+6. `TODO.md` - Implementation status
+
+**Before committing**: Verify that any code changes are reflected in the corresponding documentation.
