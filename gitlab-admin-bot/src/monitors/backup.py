@@ -67,10 +67,10 @@ class BackupMonitor(BaseMonitor):
 
                 if borg_status.get("error"):
                     issues.append(f"Borg check failed: {borg_status['error']}")
-                elif borg_status.get("age_hours", 999) > self.settings.max_backup_age_hours * 2:
-                    issues.append(
-                        f"Borg backup is {borg_status['age_hours']:.1f} hours old"
-                    )
+                elif "age_hours" in borg_status:
+                    borg_age = borg_status["age_hours"]
+                    if borg_age > self.settings.max_backup_age_hours * 2:
+                        issues.append(f"Borg backup is {borg_age:.1f} hours old")
 
             # Check backup log for recent errors
             log_status = await self._check_backup_log()

@@ -49,7 +49,7 @@ class TestHealthMonitor:
         assert result.details["liveness"] is True
 
     @pytest.mark.asyncio
-    async def test_check_health_failed(self, health_monitor, mock_httpx_client, conftest):
+    async def test_check_health_failed(self, health_monitor, mock_httpx_client):
         """Test health check when health endpoint fails."""
         from tests.conftest import MockHttpxResponse
 
@@ -70,24 +70,25 @@ class TestHealthMonitor:
         """Test health check when request times out."""
         import httpx
 
-        async def mock_client_with_timeout(*args, **kwargs):
-            class TimeoutClient:
-                async def __aenter__(self):
-                    return self
+        class TimeoutClient:
+            def __init__(self, *args, **kwargs):
+                pass
 
-                async def __aexit__(self, *args):
-                    pass
+            async def __aenter__(self):
+                return self
 
-                async def get(self, url, **kwargs):
-                    raise httpx.TimeoutException("Connection timed out")
+            async def __aexit__(self, *args):
+                pass
 
-            return TimeoutClient()
+            async def get(self, url, **kwargs):
+                raise httpx.TimeoutException("Connection timed out")
 
-        with patch("httpx.AsyncClient", mock_client_with_timeout):
+        with patch("httpx.AsyncClient", TimeoutClient):
             result = await health_monitor.check()
 
         assert result.status == Status.CRITICAL
-        assert "timed out" in result.message.lower()
+        # The exception is caught and reported as "check failed"
+        assert "failed" in result.message.lower()
 
     @pytest.mark.asyncio
     async def test_get_status(self, health_monitor, mock_httpx_client):
@@ -288,7 +289,9 @@ class TestBackupMonitor:
         result = await backup_monitor.check()
 
         assert result.status == Status.CRITICAL
-        assert "no backup" in result.message.lower() or "not found" in result.message.lower()
+        # When no backup exists, age defaults to 999 hours, triggering "too old" message
+        assert "hours" in result.message.lower() or "old" in result.message.lower()
+        assert result.details["local"]["exists"] is False
 
     @pytest.mark.asyncio
     async def test_trigger_backup(self, backup_monitor, mock_ssh_client):

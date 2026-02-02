@@ -10,7 +10,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from pydantic import SecretStr
 
-from src.alerting.manager import AlertManager
 from src.config import (
     AlertingSettings,
     BackupSettings,
@@ -129,16 +128,17 @@ def settings(
 
 
 @pytest.fixture
-def mock_alert_manager(alerting_settings: AlertingSettings) -> AlertManager:
-    """Create an AlertManager with mocked send methods."""
-    manager = AlertManager(alerting_settings)
+def mock_alert_manager() -> MagicMock:
+    """Create a fully mocked AlertManager."""
+    manager = MagicMock()
+    manager.send_alert = AsyncMock()
     manager._send_email = AsyncMock()
     manager._send_webhook = AsyncMock()
     return manager
 
 
 @pytest.fixture
-def mock_ssh_client(gitlab_settings: GitLabSettings) -> MagicMock:
+def mock_ssh_client() -> MagicMock:
     """Create a mocked SSH client."""
     client = MagicMock(spec=SSHClient)
     client.run_command = AsyncMock(return_value="")
@@ -165,7 +165,12 @@ def sample_resource_status() -> dict[str, Any]:
     return {
         "disk": {
             "/": {"size": "100G", "used": "45G", "available": "55G", "percent": 45},
-            "/var/opt/gitlab": {"size": "200G", "used": "80G", "available": "120G", "percent": 40},
+            "/var/opt/gitlab": {
+                "size": "200G",
+                "used": "80G",
+                "available": "120G",
+                "percent": 40,
+            },
         },
         "memory": {
             "total_mb": 16384,
@@ -189,7 +194,7 @@ def sample_backup_status() -> dict[str, Any]:
     return {
         "local": {
             "exists": True,
-            "filename": "/var/opt/gitlab/backups/1704067200_2024_01_01_16.7.0_gitlab_backup.tar",
+            "filename": "/var/opt/gitlab/backups/1704067200_gitlab_backup.tar",
             "size_gb": 5.2,
             "timestamp": "2024-01-01T12:00:00",
             "age_hours": 1.5,
@@ -231,7 +236,9 @@ def sample_check_result_critical() -> CheckResult:
 class MockHttpxResponse:
     """Mock httpx response for testing."""
 
-    def __init__(self, status_code: int = 200, text: str = "OK", json_data: dict | None = None):
+    def __init__(
+        self, status_code: int = 200, text: str = "OK", json_data: dict | None = None
+    ):
         self.status_code = status_code
         self.text = text
         self._json_data = json_data or {}
