@@ -1,0 +1,222 @@
+# =============================================================================
+# GitLab Infrastructure Project - .gitignore
+# =============================================================================
+
+# =============================================================================
+# Secrets and Credentials (NEVER commit these)
+# =============================================================================
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+.env
+.env.*
+!.env.example
+secrets/
+credentials/
+**/secrets.yaml
+**/secrets.yml
+**/*-secrets.json
+**/gitlab-secrets.json
+**/.ssh/
+id_rsa*
+id_ed25519*
+*.gpg
+
+# API keys and tokens
+*.token
+api_key*
+apikey*
+
+# =============================================================================
+# Terraform
+# =============================================================================
+terraform/.terraform/
+terraform/.terraform.lock.hcl
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/*.tfvars
+!terraform/*.tfvars.example
+terraform/crash.log
+terraform/crash.*.log
+terraform/*.tfplan
+terraform/override.tf
+terraform/override.tf.json
+terraform/*_override.tf
+terraform/*_override.tf.json
+
+# =============================================================================
+# Python
+# =============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+.env/
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Ruff
+.ruff_cache/
+
+# =============================================================================
+# Docker
+# =============================================================================
+.docker/
+docker-compose.override.yml
+docker-compose.override.yaml
+
+# =============================================================================
+# IDE and Editor
+# =============================================================================
+# VS Code
+.vscode/
+!.vscode/settings.json.example
+!.vscode/extensions.json
+
+# JetBrains IDEs
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Vim
+*.swp
+*.swo
+*~
+.*.sw?
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# Sublime Text
+*.sublime-workspace
+*.sublime-project
+
+# =============================================================================
+# Operating System
+# =============================================================================
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+# =============================================================================
+# Logs and Databases
+# =============================================================================
+*.log
+logs/
+*.sqlite
+*.sqlite3
+*.db
+!schema.sql
+
+# =============================================================================
+# Build and Output
+# =============================================================================
+out/
+output/
+tmp/
+temp/
+*.tmp
+*.bak
+*.backup
+
+# =============================================================================
+# Project Specific
+# =============================================================================
+# Local configuration overrides
+config.local.yaml
+config.local.yml
+
+# Backup files from scripts
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+!scripts/*.example.tar.gz
+
+# Admin bot data directory (runtime data)
+gitlab-admin-bot/data/
+gitlab-admin-bot/logs/
+
+# Test artifacts
+test-output/
+.test-data/
