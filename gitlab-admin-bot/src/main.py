@@ -20,6 +20,7 @@ from src.monitors.resources import ResourceMonitor
 from src.monitors.backup import BackupMonitor
 from src.alerting.manager import AlertManager
 from src.ai.analyst import AIAnalyst
+from src.maintenance.tasks import MaintenanceRunner
 from src.utils.gitlab_api import GitLabClient
 from src.utils.ssh import SSHClient
 
@@ -61,6 +62,9 @@ class AdminBot:
         self.resource_monitor: ResourceMonitor | None = None
         self.backup_monitor: BackupMonitor | None = None
 
+        # Maintenance
+        self.maintenance: MaintenanceRunner | None = None
+
     async def initialize(self) -> None:
         """Initialize all components."""
         logger.info("Initializing Admin Bot", version="1.0.0")
@@ -76,6 +80,12 @@ class AdminBot:
         if self.settings.claude.enabled:
             self.ai_analyst = AIAnalyst(self.settings.claude)
             logger.info("AI Analyst enabled", model=self.settings.claude.model)
+
+        # Initialize maintenance runner
+        self.maintenance = MaintenanceRunner(
+            ssh_client=self.ssh_client,
+            alert_manager=self.alert_manager,
+        )
 
         # Initialize monitors
         self.health_monitor = HealthMonitor(
@@ -213,16 +223,66 @@ class AdminBot:
     async def _daily_maintenance(self) -> None:
         """Daily maintenance tasks."""
         logger.info("Running daily maintenance")
-        # Generate daily report
-        # Sync backups to Storage Box
-        # Clean old logs
+
+        if not self.maintenance:
+            logger.warning("Maintenance runner not initialized")
+            return
+
+        try:
+            # Generate daily status report
+            report = await self.maintenance.generate_daily_report()
+            logger.info("Daily report generated", success=True)
+
+            # Rotate logs
+            result = await self.maintenance.rotate_logs()
+            logger.info("Log rotation completed", success=result.get("success"))
+
+            # Clean old artifacts
+            result = await self.maintenance.cleanup_old_artifacts(days=30)
+            logger.info("Artifact cleanup completed", success=result.get("success"))
+
+        except Exception as e:
+            logger.error("Daily maintenance failed", error=str(e))
+            if self.alert_manager:
+                await self.alert_manager.send_alert(
+                    severity="warning",
+                    title="Daily Maintenance Failed",
+                    message=f"Daily maintenance encountered an error: {e}",
+                )
 
     async def _weekly_maintenance(self) -> None:
         """Weekly maintenance tasks."""
         logger.info("Running weekly maintenance")
-        # Container registry GC
-        # Database vacuum
-        # Backup restore test
+
+        if not self.maintenance:
+            logger.warning("Maintenance runner not initialized")
+            return
+
+        try:
+            # Container registry garbage collection
+            result = await self.maintenance.cleanup_registry()
+            logger.info("Registry GC completed", success=result.get("success"))
+
+            # Database vacuum analyze
+            result = await self.maintenance.database_vacuum()
+            logger.info("Database vacuum completed", success=result.get("success"))
+
+            # GitLab integrity check
+            result = await self.maintenance.check_gitlab_integrity()
+            logger.info("Integrity check completed", success=result.get("success"))
+
+            # TODO: Backup restore test (requires RestoreTester integration)
+            # This is a longer operation that provisions a test VM
+            # Consider running it monthly or on-demand
+
+        except Exception as e:
+            logger.error("Weekly maintenance failed", error=str(e))
+            if self.alert_manager:
+                await self.alert_manager.send_alert(
+                    severity="warning",
+                    title="Weekly Maintenance Failed",
+                    message=f"Weekly maintenance encountered an error: {e}",
+                )
 
     async def start(self) -> None:
         """Start the scheduler and all monitoring."""
@@ -303,6 +363,71 @@ async def trigger_analysis():
 
     await bot._run_ai_analysis()
     return {"status": "analysis_triggered"}
+
+
+@app.post("/backup")
+async def trigger_backup():
+    """Manually trigger a GitLab backup."""
+    if not bot or not bot.ssh_client:
+        return {"error": "SSH client not available"}
+
+    try:
+        output = await bot.ssh_client.run_command(
+            "gitlab-backup create STRATEGY=copy SKIP=artifacts,lfs",
+            timeout=1800,
+        )
+        return {"status": "backup_triggered", "output": output[-500:]}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/scheduler/jobs")
+async def list_scheduled_jobs():
+    """List all scheduled jobs and their status."""
+    if not bot or not bot.scheduler:
+        return {"error": "Scheduler not available"}
+
+    jobs = []
+    for job in bot.scheduler.get_jobs():
+        jobs.append({
+            "id": job.id,
+            "name": job.name,
+            "next_run": job.next_run_time.isoformat() if job.next_run_time else None,
+            "trigger": str(job.trigger),
+        })
+    return {"jobs": jobs}
+
+
+@app.post("/maintenance/{task}")
+async def trigger_maintenance(task: str):
+    """Manually trigger a maintenance task.
+
+    Available tasks: cleanup_artifacts, cleanup_registry, rotate_logs,
+                     database_vacuum, integrity_check, daily_report
+    """
+    if not bot or not bot.maintenance:
+        return {"error": "Maintenance runner not available"}
+
+    task_map = {
+        "cleanup_artifacts": bot.maintenance.cleanup_old_artifacts,
+        "cleanup_registry": bot.maintenance.cleanup_registry,
+        "rotate_logs": bot.maintenance.rotate_logs,
+        "database_vacuum": bot.maintenance.database_vacuum,
+        "integrity_check": bot.maintenance.check_gitlab_integrity,
+        "daily_report": bot.maintenance.generate_daily_report,
+    }
+
+    if task not in task_map:
+        return {
+            "error": f"Unknown task: {task}",
+            "available_tasks": list(task_map.keys()),
+        }
+
+    try:
+        result = await task_map[task]()
+        return {"status": "completed", "task": task, "result": result}
+    except Exception as e:
+        return {"status": "failed", "task": task, "error": str(e)}
 
 
 def main() -> None:

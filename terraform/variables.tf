@@ -142,7 +142,7 @@ variable "common_labels" {
   description = "Common labels to apply to all resources"
   type        = map(string)
   default = {
-    project     = "acme-gitlab"
-    managed_by  = "terraform"
+    project    = "acme-gitlab"
+    managed_by = "terraform"
   }
 }

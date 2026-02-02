@@ -48,6 +48,12 @@
   - `README.md` - Updated project structure with tests, CI/CD
   - `scripts/setup-borg-backup.sh` - Creates backup script if not present from cloud-init
 
+- [x] **Developer experience improvements**
+  - `.env.example` - Environment variables template for Admin Bot deployment
+  - `Makefile` - Common commands (test, lint, docker, terraform)
+  - `.pre-commit-config.yaml` - Automated code quality checks
+  - `main.py` - Wired up MaintenanceRunner, added API endpoints (/backup, /scheduler/jobs, /maintenance/{task})
+
 ---
 
 ## Remaining Tasks
@@ -156,3 +162,7 @@ docker compose up -d
 | `CLAUDE.md` | Updated | Project structure, documentation maintenance guidelines |
 | `README.md` | Updated | Project structure with tests, CI/CD |
 | `TODO.md` | Created | Implementation status tracking |
+| `gitlab-admin-bot/.env.example` | Created | Environment variables template |
+| `gitlab-admin-bot/src/main.py` | Updated | MaintenanceRunner, new API endpoints |
+| `Makefile` | Created | Development commands |
+| `.pre-commit-config.yaml` | Created | Pre-commit hooks |

@@ -137,6 +137,7 @@ botlab/
 │   │   ├── test_ai_analyst.py   # AI integration tests
 │   │   └── test_recovery.py     # Recovery tests
 │   ├── config/config.yaml       # Configuration template
+│   ├── .env.example             # Environment variables template
 │   ├── Dockerfile
 │   └── docker-compose.yml
 ├── scripts/                     # Utility scripts
@@ -145,8 +146,10 @@ botlab/
 │   ├── setup-borg-backup.sh     # Backup setup (interactive)
 │   ├── verify-backup.sh         # Backup verification (--json, --quiet)
 │   └── restore-gitlab.sh        # DR restore procedure
-└── .github/workflows/           # CI/CD
-    └── test.yml                 # pytest, ruff, mypy, shellcheck, terraform
+├── .github/workflows/           # CI/CD
+│   └── test.yml                 # pytest, ruff, mypy, shellcheck, terraform
+├── Makefile                     # Development commands (make help)
+└── .pre-commit-config.yaml      # Pre-commit hooks
 ```
 
 ## Disaster Recovery

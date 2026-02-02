@@ -24,7 +24,7 @@ resource "hcloud_ssh_key" "admin_bot" {
   public_key = tls_private_key.admin_bot.public_key_openssh
 
   labels = merge(var.common_labels, {
-    type = "service"
+    type      = "service"
     component = "admin-bot"
   })
 }

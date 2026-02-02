@@ -120,7 +120,7 @@ output "dns_configuration" {
 
 output "connection_instructions" {
   description = "How to connect to the servers"
-  value = <<-EOT
+  value       = <<-EOT
     # SSH to GitLab server:
     ssh root@${hcloud_server.gitlab_primary.ipv4_address}
 

@@ -96,13 +96,17 @@ botlab/
 │   │   └── utils/                  # SSH, GitLab API clients
 │   ├── tests/                      # Test suite (pytest)
 │   ├── config/                     # Configuration templates
-│   └── scripts/                    # Installation scripts
+│   ├── .env.example                # Environment variables template
+│   ├── Dockerfile
+│   └── docker-compose.yml
 ├── scripts/                        # Deployment and maintenance scripts
 │   ├── setup-borg-backup.sh        # BorgBackup setup
 │   ├── restore-gitlab.sh           # DR restore procedure
 │   └── verify-backup.sh            # Backup verification
-└── .github/workflows/              # CI/CD pipeline
-    └── test.yml                    # pytest, ruff, mypy, shellcheck, terraform
+├── .github/workflows/              # CI/CD pipeline
+│   └── test.yml                    # pytest, ruff, mypy, shellcheck, terraform
+├── Makefile                        # Common development commands
+└── .pre-commit-config.yaml         # Pre-commit hooks configuration
 ```
 
 ## Development Commands

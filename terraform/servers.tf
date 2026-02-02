@@ -95,8 +95,8 @@ resource "hcloud_server" "admin_bot" {
   })
 
   user_data = templatefile("${path.module}/templates/admin-bot-cloud-init.yaml", {
-    gitlab_private_ip    = var.gitlab_private_ip
-    gitlab_domain        = var.domain
+    gitlab_private_ip     = var.gitlab_private_ip
+    gitlab_domain         = var.domain
     admin_bot_private_key = tls_private_key.admin_bot.private_key_openssh
   })
 
