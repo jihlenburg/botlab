@@ -6,6 +6,7 @@ import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+from typing import Any
 
 import structlog
 from hcloud import Client as HCloudClient
@@ -207,12 +208,12 @@ Please verify and update DNS records.
 
         return state
 
-    async def _provision_recovery_server(self):
+    async def _provision_recovery_server(self) -> Any:
         """Provision a new GitLab server."""
         logger.info("Provisioning recovery server", location=self.location)
         loop = asyncio.get_event_loop()
 
-        def create_server():
+        def create_server() -> Any:
             # Get SSH keys for access
             ssh_keys = self.hcloud.ssh_keys.get_all()
 
@@ -221,7 +222,7 @@ Please verify and update DNS records.
                 server_type=ServerType(name="cpx31"),  # Match original spec: 4 vCPU, 16GB RAM
                 image=Image(name="ubuntu-24.04"),
                 location=Location(name=self.location),
-                ssh_keys=ssh_keys,
+                ssh_keys=ssh_keys,  # type: ignore[arg-type]
                 labels={
                     "purpose": "gitlab-recovery",
                     "managed_by": "admin-bot",
@@ -248,7 +249,7 @@ Please verify and update DNS records.
         start_time = datetime.now()
 
         while True:
-            def get_action():
+            def get_action() -> Any:
                 return self.hcloud.actions.get_by_id(action.id)
 
             current_action = await loop.run_in_executor(None, get_action)
@@ -293,12 +294,12 @@ Please verify and update DNS records.
 
             await asyncio.sleep(10)
 
-    async def _attach_volumes(self, server) -> None:
+    async def _attach_volumes(self, server: Any) -> None:
         """Attach existing volumes to new server."""
         logger.info("Checking for existing volumes", server_id=server.id)
         loop = asyncio.get_event_loop()
 
-        def get_volumes():
+        def get_volumes() -> Any:
             return self.hcloud.volumes.get_all(
                 label_selector="purpose=gitlab-data"
             )
@@ -325,7 +326,7 @@ Please verify and update DNS records.
                     old_server_id=volume.server.id,
                 )
 
-                def detach(vol=volume):
+                def detach(vol: Any = volume) -> Any:
                     return self.hcloud.volumes.detach(vol)
 
                 action = await loop.run_in_executor(None, detach)
@@ -334,7 +335,7 @@ Please verify and update DNS records.
             # Attach to recovery server
             logger.info("Attaching volume to recovery server", volume_id=volume.id)
 
-            def attach(vol=volume, srv=server):
+            def attach(vol: Any = volume, srv: Any = server) -> Any:
                 return self.hcloud.volumes.attach(vol, srv)
 
             action = await loop.run_in_executor(None, attach)

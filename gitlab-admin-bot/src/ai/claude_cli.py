@@ -147,11 +147,14 @@ class ClaudeCLI:
                     # Try to parse the result as JSON if it looks like JSON
                     if isinstance(result_text, str) and result_text.strip().startswith("{"):
                         try:
-                            return json.loads(result_text)
+                            inner_parsed: dict[str, Any] = json.loads(result_text)
+                            return inner_parsed
                         except json.JSONDecodeError:
                             return {"text": result_text}
                     return {"text": result_text}
-                return data
+                if isinstance(data, dict):
+                    return data
+                return {"text": str(data)}
             except json.JSONDecodeError:
                 logger.warning("Failed to parse CLI JSON output")
                 return {"text": output}
@@ -170,7 +173,8 @@ class ClaudeCLI:
             # Try to parse accumulated text as JSON
             if result_text.strip().startswith("{"):
                 try:
-                    return json.loads(result_text)
+                    parsed: dict[str, Any] = json.loads(result_text)
+                    return parsed
                 except json.JSONDecodeError:
                     pass
             return {"text": result_text}
@@ -261,4 +265,4 @@ Respond with JSON:
             output_format="text",
         )
 
-        return result.get("text", str(result))
+        return str(result.get("text", str(result)))

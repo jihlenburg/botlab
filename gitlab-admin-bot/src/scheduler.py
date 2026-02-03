@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import Any
 
 import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -27,11 +28,11 @@ class Scheduler:
 
     def add_job(
         self,
-        func: Callable,
+        func: Callable[..., Any],
         trigger_type: str,
         id: str,
         name: str,
-        **trigger_kwargs,
+        **trigger_kwargs: Any,
     ) -> None:
         """Add a job to the scheduler."""
         if trigger_type == "interval":

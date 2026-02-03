@@ -15,6 +15,8 @@ from src.config import ClaudeSettings
 if TYPE_CHECKING:
     import anthropic
 
+    from src.ai.claude_cli import ClaudeCLI
+
 logger = structlog.get_logger(__name__)
 
 
@@ -125,16 +127,19 @@ class AIAnalyst:
         self._use_cli = settings.use_cli
         self._history: list[AnalysisResult] = []
 
+        self._cli: ClaudeCLI | None = None
+        self._client: anthropic.Anthropic | None = None
+
         if self._use_cli:
             # Use Claude Code CLI
-            from src.ai.claude_cli import ClaudeCLI, CLISettings
+            from src.ai.claude_cli import ClaudeCLI as ClaudeCLIImpl
+            from src.ai.claude_cli import CLISettings
 
             cli_settings = CLISettings(
                 cli_path=settings.cli_path,
                 timeout=settings.cli_timeout,
             )
-            self._cli = ClaudeCLI(cli_settings)
-            self._client: anthropic.Anthropic | None = None
+            self._cli = ClaudeCLIImpl(cli_settings)
             logger.info("AI Analyst using CLI mode", cli_path=settings.cli_path)
         else:
             # Use Anthropic SDK directly
@@ -143,7 +148,6 @@ class AIAnalyst:
             self._client = anthropic.Anthropic(
                 api_key=settings.api_key.get_secret_value()
             )
-            self._cli = None
             logger.info("AI Analyst using SDK mode", model=settings.model)
 
     @property
@@ -222,7 +226,8 @@ class AIAnalyst:
                 ],
             )
 
-            response_text = message.content[0].text
+            content_block = message.content[0]
+            response_text: str = content_block.text  # type: ignore[union-attr]
             return self._parse_response(response_text)
 
         except anthropic.APIError as e:
@@ -238,6 +243,8 @@ class AIAnalyst:
     ) -> AnalysisResult:
         """Analyze system state using Claude Code CLI."""
         from src.ai.claude_cli import ClaudeCLIError
+
+        assert self._cli is not None
 
         context_dict = {
             "timestamp": datetime.now().isoformat(),
@@ -393,12 +400,14 @@ class AIAnalyst:
             ],
         )
 
-        return message.content[0].text
+        content_block = message.content[0]
+        return content_block.text  # type: ignore[union-attr]
 
     async def _ask_via_cli(
         self, question: str, context: dict[str, Any] | None = None
     ) -> str:
         """Ask a question using Claude Code CLI."""
+        assert self._cli is not None
         return await self._cli.ask(
             question=question,
             context=context,

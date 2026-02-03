@@ -6,7 +6,7 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
-import paramiko
+import paramiko  # type: ignore[import-untyped]
 import structlog
 
 from src.config import GitLabSettings
@@ -103,7 +103,7 @@ class SSHClient:
                 stderr=error[:500],
             )
 
-        return output
+        return str(output)
 
     async def run_script(
         self,

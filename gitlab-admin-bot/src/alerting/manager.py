@@ -34,7 +34,7 @@ class Alert:
     timestamp: datetime = field(default_factory=datetime.now)
     alert_id: str = ""
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if not self.alert_id:
             # Generate deterministic ID from title and severity
             content = f"{self.severity}:{self.title}"
@@ -197,6 +197,18 @@ GitLab Admin Bot
 
     async def _send_webhook(self, alert: Alert) -> None:
         """Send alert via webhook (Slack/Mattermost compatible)."""
+        fields: list[dict[str, Any]] = [
+            {"title": "Severity", "value": alert.severity, "short": True},
+            {"title": "Time", "value": alert.timestamp.isoformat(), "short": True},
+        ]
+
+        # Add details as fields
+        for key, value in alert.details.items():
+            if isinstance(value, (str, int, float, bool)):
+                fields.append(
+                    {"title": key, "value": str(value), "short": True}
+                )
+
         payload = {
             "text": f"*[{alert.severity.upper()}] {alert.title}*",
             "attachments": [
@@ -204,21 +216,11 @@ GitLab Admin Bot
                     "color": self._severity_color(alert.severity),
                     "title": alert.title,
                     "text": alert.message,
-                    "fields": [
-                        {"title": "Severity", "value": alert.severity, "short": True},
-                        {"title": "Time", "value": alert.timestamp.isoformat(), "short": True},
-                    ],
+                    "fields": fields,
                     "footer": "GitLab Admin Bot",
                 }
             ],
         }
-
-        # Add details as fields
-        for key, value in alert.details.items():
-            if isinstance(value, (str, int, float, bool)):
-                payload["attachments"][0]["fields"].append(
-                    {"title": key, "value": str(value), "short": True}
-                )
 
         async with httpx.AsyncClient() as client:
             response = await client.post(

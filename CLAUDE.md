@@ -136,6 +136,12 @@ docker compose up -d
 5. **Security Hardening** (Week 6): Append-only Borg, S3 immutable backups
 6. **Testing** (Week 7): DR drill, documentation
 
+## Code Quality Requirements
+
+**mypy must always be clean after any code changes.** Run `mypy src/ --ignore-missing-imports` from the `gitlab-admin-bot/` directory and ensure zero errors before considering any code change complete. This is a hard requirement, not optional.
+
+Additionally, `ruff check src/ tests/` and `pytest tests/` must pass.
+
 ## Before Making Changes
 
 1. **Read `docs/DESIGN.md`** for the authoritative specification

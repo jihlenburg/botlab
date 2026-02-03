@@ -41,8 +41,8 @@ class HealthMonitor(BaseMonitor):
     async def check(self) -> CheckResult:
         """Check GitLab health endpoints."""
         start_time = time.time()
-        issues = []
-        details = {}
+        issues: list[str] = []
+        details: dict[str, Any] = {}
 
         try:
             async with httpx.AsyncClient(timeout=10.0, verify=True) as client:

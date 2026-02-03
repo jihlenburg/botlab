@@ -42,8 +42,8 @@ class BackupMonitor(BaseMonitor):
     async def check(self) -> CheckResult:
         """Check backup status."""
         start_time = time.time()
-        issues = []
-        details = {}
+        issues: list[str] = []
+        details: dict[str, Any] = {}
 
         try:
             # Check local backup files

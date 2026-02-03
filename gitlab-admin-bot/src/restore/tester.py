@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any
 
 import httpx
 import structlog
@@ -87,19 +88,21 @@ class RestoreTester:
             # Wait for server to be ready
             await asyncio.sleep(60)
 
+            server_ip: str = server.public_net.ipv4.ip
+
             # Step 2: Install GitLab
             logger.info("Installing GitLab on test server")
-            await self._install_gitlab(server.public_net.ipv4.ip)
+            await self._install_gitlab(server_ip)
             result.steps_completed.append("gitlab_installed")
 
             # Step 3: Restore backup
             logger.info("Restoring backup on test server")
-            await self._restore_backup(server.public_net.ipv4.ip)
+            await self._restore_backup(server_ip)
             result.steps_completed.append("backup_restored")
 
             # Step 4: Verify
             logger.info("Verifying restored GitLab")
-            verification = await self._verify_restore(server.public_net.ipv4.ip)
+            verification = await self._verify_restore(server_ip)
             result.verification_results = verification
             result.steps_completed.append("verification_completed")
 
@@ -128,12 +131,12 @@ class RestoreTester:
 
         return result
 
-    async def _provision_test_server(self):
+    async def _provision_test_server(self) -> Any:
         """Provision a test server for restore testing."""
         logger.info("Provisioning test server", location=self.location)
         loop = asyncio.get_event_loop()
 
-        def create_server():
+        def create_server() -> Any:
             # Get SSH keys
             ssh_keys = self.hcloud.ssh_keys.get_all()
 
@@ -142,7 +145,7 @@ class RestoreTester:
                 server_type=ServerType(name="cx21"),  # Smaller instance for testing
                 image=Image(name="ubuntu-24.04"),
                 location=Location(name=self.location),
-                ssh_keys=ssh_keys,
+                ssh_keys=ssh_keys,  # type: ignore[arg-type]
                 labels={
                     "purpose": "restore-test",
                     "managed_by": "admin-bot",
@@ -169,7 +172,7 @@ class RestoreTester:
         start_time = datetime.now()
 
         while True:
-            def get_action():
+            def get_action() -> Any:
                 return self.hcloud.actions.get_by_id(action.id)
 
             current_action = await loop.run_in_executor(None, get_action)

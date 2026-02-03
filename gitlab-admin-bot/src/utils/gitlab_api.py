@@ -40,7 +40,7 @@ class GitLabClient:
             logger.error("GitLab authentication failed", error=str(e))
             return False
 
-    def get_version(self) -> dict[str, str]:
+    def get_version(self) -> tuple[str, str]:
         """Get GitLab version information."""
         return self.gl.version()
 

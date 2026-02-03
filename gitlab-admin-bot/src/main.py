@@ -4,15 +4,17 @@ from __future__ import annotations
 
 import signal
 import sys
+import types
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Any
 
 import structlog
 import uvicorn
 from fastapi import FastAPI
 from prometheus_client import make_asgi_app
 
-from src.ai.analyst import AIAnalyst
+from src.ai.analyst import AIAnalyst, RecommendedAction
 from src.alerting.manager import AlertManager
 from src.config import get_settings
 from src.maintenance.tasks import MaintenanceRunner
@@ -116,31 +118,34 @@ class AdminBot:
         settings = self.settings.monitoring
 
         # Health checks
-        self.scheduler.add_job(
-            self.health_monitor.check,
-            "interval",
-            seconds=settings.health_check_interval_seconds,
-            id="health_check",
-            name="GitLab Health Check",
-        )
+        if self.health_monitor:
+            self.scheduler.add_job(
+                self.health_monitor.check,
+                "interval",
+                seconds=settings.health_check_interval_seconds,
+                id="health_check",
+                name="GitLab Health Check",
+            )
 
         # Resource monitoring
-        self.scheduler.add_job(
-            self.resource_monitor.check,
-            "interval",
-            seconds=settings.resource_check_interval_seconds,
-            id="resource_check",
-            name="Resource Monitor",
-        )
+        if self.resource_monitor:
+            self.scheduler.add_job(
+                self.resource_monitor.check,
+                "interval",
+                seconds=settings.resource_check_interval_seconds,
+                id="resource_check",
+                name="Resource Monitor",
+            )
 
         # Backup monitoring
-        self.scheduler.add_job(
-            self.backup_monitor.check,
-            "interval",
-            minutes=settings.backup_check_interval_minutes,
-            id="backup_check",
-            name="Backup Monitor",
-        )
+        if self.backup_monitor:
+            self.scheduler.add_job(
+                self.backup_monitor.check,
+                "interval",
+                minutes=settings.backup_check_interval_minutes,
+                id="backup_check",
+                name="Backup Monitor",
+            )
 
         # AI analysis (if enabled)
         if self.ai_analyst:
@@ -179,6 +184,10 @@ class AdminBot:
             return
 
         try:
+            if not self.health_monitor or not self.resource_monitor or not self.backup_monitor:
+                logger.warning("Monitors not initialized, skipping AI analysis")
+                return
+
             # Gather system state
             health_status = await self.health_monitor.get_status()
             resource_status = await self.resource_monitor.get_status()
@@ -202,7 +211,7 @@ class AdminBot:
                 for action in analysis.recommended_actions:
                     if action.auto_execute:
                         await self._execute_action(action)
-                    else:
+                    elif self.alert_manager:
                         # Alert admins about recommended action
                         await self.alert_manager.send_alert(
                             severity="info",
@@ -213,7 +222,7 @@ class AdminBot:
         except Exception as e:
             logger.error("AI analysis failed", error=str(e))
 
-    async def _execute_action(self, action) -> None:
+    async def _execute_action(self, action: RecommendedAction) -> None:
         """Execute a recommended maintenance action."""
         logger.info("Executing recommended action", action=action.name)
         # Implementation depends on action type
@@ -331,13 +340,13 @@ app.mount("/metrics", metrics_app)
 
 
 @app.get("/health")
-async def health_check():
+async def health_check() -> dict[str, str]:
     """Health check endpoint."""
     return {"status": "healthy", "version": "1.0.0"}
 
 
 @app.get("/status")
-async def status():
+async def status() -> dict[str, Any]:
     """Get current system status."""
     if not bot:
         return {"status": "not_initialized"}
@@ -355,7 +364,7 @@ async def status():
 
 
 @app.post("/analyze")
-async def trigger_analysis():
+async def trigger_analysis() -> dict[str, str]:
     """Manually trigger AI analysis."""
     if not bot or not bot.ai_analyst:
         return {"error": "AI analyst not available"}
@@ -365,7 +374,7 @@ async def trigger_analysis():
 
 
 @app.post("/backup")
-async def trigger_backup():
+async def trigger_backup() -> dict[str, str]:
     """Manually trigger a GitLab backup."""
     if not bot or not bot.ssh_client:
         return {"error": "SSH client not available"}
@@ -381,24 +390,17 @@ async def trigger_backup():
 
 
 @app.get("/scheduler/jobs")
-async def list_scheduled_jobs():
+async def list_scheduled_jobs() -> dict[str, Any]:
     """List all scheduled jobs and their status."""
     if not bot or not bot.scheduler:
         return {"error": "Scheduler not available"}
 
-    jobs = []
-    for job in bot.scheduler.get_jobs():
-        jobs.append({
-            "id": job.id,
-            "name": job.name,
-            "next_run": job.next_run_time.isoformat() if job.next_run_time else None,
-            "trigger": str(job.trigger),
-        })
-    return {"jobs": jobs}
+    jobs_info = bot.scheduler.get_jobs()
+    return {"jobs": [{"id": k, "name": v} for k, v in jobs_info.items()]}
 
 
 @app.post("/maintenance/{task}")
-async def trigger_maintenance(task: str):
+async def trigger_maintenance(task: str) -> dict[str, Any]:
     """Manually trigger a maintenance task.
 
     Available tasks: cleanup_artifacts, cleanup_registry, rotate_logs,
@@ -407,7 +409,7 @@ async def trigger_maintenance(task: str):
     if not bot or not bot.maintenance:
         return {"error": "Maintenance runner not available"}
 
-    task_map = {
+    task_map: dict[str, Any] = {
         "cleanup_artifacts": bot.maintenance.cleanup_old_artifacts,
         "cleanup_registry": bot.maintenance.cleanup_registry,
         "rotate_logs": bot.maintenance.rotate_logs,
@@ -434,7 +436,7 @@ def main() -> None:
     settings = get_settings()
 
     # Handle shutdown signals
-    def handle_signal(signum, frame):
+    def handle_signal(signum: int, frame: types.FrameType | None) -> None:
         logger.info("Received shutdown signal", signal=signum)
         sys.exit(0)
 

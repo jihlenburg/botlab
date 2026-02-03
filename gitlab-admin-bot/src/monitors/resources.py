@@ -45,8 +45,8 @@ class ResourceMonitor(BaseMonitor):
     async def check(self) -> CheckResult:
         """Check resource usage on GitLab server."""
         start_time = time.time()
-        issues = []
-        details = {}
+        issues: list[str] = []
+        details: dict[str, Any] = {}
 
         try:
             # Get disk usage
@@ -154,7 +154,7 @@ class ResourceMonitor(BaseMonitor):
         """Check memory usage."""
         output = await self.ssh.run_command("free -m")
 
-        memory_info = {}
+        memory_info: dict[str, Any] = {}
         for line in output.strip().split("\n"):
             if line.startswith("Mem:"):
                 parts = line.split()
