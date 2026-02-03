@@ -41,13 +41,13 @@ This document provides a comprehensive security assessment of the ACME Corp GitL
 
 ### Key Findings
 
-| Area | Current State | Risk Level | Action Required |
-|------|---------------|------------|-----------------|
-| Ransomware Protection | Partial | **MEDIUM-HIGH** | Implement immutable backups |
-| Backup Isolation | Insufficient | **HIGH** | Add air-gapped/offline backup |
-| DR Coverage | Good | **MEDIUM** | Address identified edge cases |
-| Access Control | Good | **LOW** | Minor improvements |
-| Network Security | Good | **LOW** | Already implemented |
+| Area | Current State | Risk Level | Action Required | Implementation Status |
+|------|---------------|------------|-----------------|----------------------|
+| Ransomware Protection | Improved | **MEDIUM** | Verify append-only setup in prod | **Implemented** — append-only Borg script, S3 immutable backup script |
+| Backup Isolation | Improved | **MEDIUM** | Deploy S3 immutable bucket | **Implemented** — `scripts/backup-to-s3.sh` with Object Lock |
+| DR Coverage | Good | **MEDIUM** | Address identified edge cases | In progress |
+| Access Control | Good | **LOW** | Minor improvements | Unchanged |
+| Network Security | Good | **LOW** | Already implemented | Unchanged |
 
 ---
 
@@ -333,15 +333,14 @@ Geographic diversification:
 
 ### 6.1 Critical (Implement Immediately)
 
-1. **Implement append-only Borg backup**
+1. **Implement append-only Borg backup** — **IMPLEMENTED**
    - Prevents ransomware from deleting backups
-   - Effort: 2-4 hours
-   - Cost: $0 (Storage Box feature)
+   - Script: `scripts/setup-borg-append-only.sh`
+   - Creates restricted SSH key (append-only) and separate admin key (stored offline)
 
-2. **Add secondary backup destination**
-   - Protects against Storage Box failure
-   - Effort: 4-8 hours
-   - Cost: ~$5/month (Backblaze B2)
+2. **Add secondary backup destination** — **IMPLEMENTED**
+   - Script: `scripts/backup-to-s3.sh` (weekly S3 upload with Object Lock)
+   - Supports Backblaze B2, AWS S3, Wasabi
 
 3. **Create offline backup recovery kit**
    - Store offline: Borg passphrase, SSH keys, Terraform config
@@ -350,16 +349,14 @@ Geographic diversification:
 
 ### 6.2 High Priority (Implement Within 30 Days)
 
-4. **Extend backup retention**
-   - Keep monthly backups for 12 months
-   - Protects against delayed ransomware activation
-   - Effort: 1 hour
-   - Cost: ~$5/month additional storage
+4. **Extend backup retention** — **IMPLEMENTED**
+   - Monthly backups kept for 12 months (changed from 6)
+   - Updated in: `seed_schema.py`, `setup-borg-backup.sh`, `seed.example.yaml`
 
-5. **Implement backup integrity monitoring**
-   - Detect tampering/corruption early
-   - Effort: 4-8 hours
-   - Cost: $0
+5. **Implement backup integrity monitoring** — **IMPLEMENTED**
+   - `BackupMonitor.verify_integrity()` runs `borg check --repository-only`
+   - Prometheus gauge `gitlab_backup_integrity` (1=ok, 0=fail)
+   - Designed for weekly scheduled invocation
 
 6. **Document manual recovery procedures**
    - Enable recovery without Admin Bot
@@ -368,10 +365,10 @@ Geographic diversification:
 
 ### 6.3 Medium Priority (Implement Within 90 Days)
 
-7. **Add immutable backup tier**
-   - Weekly backup to S3 with Object Lock
-   - Effort: 8 hours
-   - Cost: ~$10/month
+7. **Add immutable backup tier** — **IMPLEMENTED**
+   - Script: `scripts/backup-to-s3.sh` (weekly, Object Lock COMPLIANCE mode)
+   - Seed config: `backup.s3` section in `seed.example.yaml`
+   - Config generator: `seed_bootstrap.py --target s3-conf`
 
 8. **Implement file integrity monitoring**
    - AIDE or similar on GitLab server

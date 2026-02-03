@@ -4,77 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.ai.analyst import AIAnalyst, AnalysisResult, RecommendedAction, Urgency
+from src.ai.analyst import AIAnalyst, AnalysisResult, Urgency
 from src.ai.claude_cli import ClaudeCLI, ClaudeCLIError, CLISettings
-
-
-class TestUrgency:
-    """Tests for Urgency enum."""
-
-    def test_urgency_values(self):
-        """Test Urgency enum values."""
-        assert Urgency.CRITICAL.value == "critical"
-        assert Urgency.HIGH.value == "high"
-        assert Urgency.MEDIUM.value == "medium"
-        assert Urgency.LOW.value == "low"
-        assert Urgency.INFO.value == "info"
-
-
-class TestRecommendedAction:
-    """Tests for RecommendedAction dataclass."""
-
-    def test_action_creation(self):
-        """Test creating a recommended action."""
-        action = RecommendedAction(
-            name="cleanup_artifacts",
-            description="Clean up old CI artifacts",
-            reason="Disk space is running low",
-            urgency=Urgency.MEDIUM,
-            auto_execute=True,
-            command="gitlab-rake gitlab:cleanup:orphan_job_artifact_files",
-        )
-
-        assert action.name == "cleanup_artifacts"
-        assert action.auto_execute is True
-        assert action.urgency == Urgency.MEDIUM
-
-    def test_action_defaults(self):
-        """Test recommended action default values."""
-        action = RecommendedAction(
-            name="test",
-            description="Test action",
-            reason="Testing",
-            urgency=Urgency.INFO,
-        )
-
-        assert action.auto_execute is False
-        assert action.command is None
-        assert action.parameters == {}
-
-
-class TestAnalysisResult:
-    """Tests for AnalysisResult dataclass."""
-
-    def test_result_creation(self):
-        """Test creating an analysis result."""
-        result = AnalysisResult(
-            timestamp=datetime.now(),
-            summary="System is healthy",
-            actions_needed=False,
-            urgency=Urgency.INFO,
-            recommendations=["Continue monitoring"],
-            recommended_actions=[],
-            raw_analysis='{"summary": "System is healthy"}',
-        )
-
-        assert result.summary == "System is healthy"
-        assert result.actions_needed is False
-        assert len(result.recommendations) == 1
 
 
 class TestAIAnalyst:

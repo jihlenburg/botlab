@@ -925,6 +925,8 @@ gitlab-admin-bot/
 
 ### 7.8 Multi-Repository Policy System
 
+> **Status**: Planned — not yet implemented. The policy file format is defined but the bot does not yet scan or enforce `.gitlab-bot.yml` files.
+
 > **Full Specification**: See [INTEGRATOR-BOT-PLAN.md](INTEGRATOR-BOT-PLAN.md) Section 7 for complete policy architecture.
 
 The Integrator Bot supports **per-project policy files** that enable distributed, project-aware automation.
@@ -1083,6 +1085,8 @@ command="/usr/local/bin/gitlab-admin-wrapper.sh",no-port-forwarding,no-X11-forwa
 ## 9. Ransomware Protection
 
 > **Full Analysis**: See [SECURITY-ASSESSMENT.md](SECURITY-ASSESSMENT.md) for complete threat model and recommendations.
+>
+> **Implementation status**: Append-only Borg setup (`scripts/setup-borg-append-only.sh`), S3 immutable backups (`scripts/backup-to-s3.sh`), integrity verification (`BackupMonitor.verify_integrity()`), and extended retention (12 months) are implemented.  Seed configuration supports S3 via `backup.s3` section.
 
 ### 9.1 Threat Summary
 

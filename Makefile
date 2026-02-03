@@ -7,6 +7,7 @@
 .PHONY: help install test lint format type-check pre-commit \
         docker-build docker-up docker-down docker-logs docker-shell \
         tf-init tf-plan tf-apply tf-destroy \
+        seed-validate seed-generate seed-diff \
         clean all
 
 # Default target
@@ -105,6 +106,19 @@ tf-validate: ## Validate Terraform configuration
 
 tf-output: ## Show Terraform outputs
 	cd terraform && terraform output
+
+# =============================================================================
+# Seed Configuration
+# =============================================================================
+
+seed-validate: ## Validate seed.yaml
+	python scripts/seed_bootstrap.py seed.yaml --validate
+
+seed-generate: ## Generate all config files from seed.yaml
+	python scripts/seed_bootstrap.py seed.yaml --target all
+
+seed-diff: ## Show diff of what seed would generate vs existing files
+	python scripts/seed_bootstrap.py seed.yaml --target all --diff
 
 # =============================================================================
 # Scripts

@@ -1,0 +1,147 @@
+# =============================================================================
+# Seed Configuration - Single Source of Truth
+# =============================================================================
+# This file contains EVERY value needed to bootstrap the full ACME GitLab
+# infrastructure from scratch. Copy to seed.yaml and fill in real values.
+#
+# SECURITY: seed.yaml contains secrets. Store it encrypted (sops/age) or
+# in a password manager. NEVER commit seed.yaml to version control.
+#
+# Usage:
+#   cp seed.example.yaml seed.yaml
+#   # Edit seed.yaml with real values
+#   python scripts/seed_bootstrap.py seed.yaml --validate
+#   python scripts/seed_bootstrap.py seed.yaml --target all
+#
+# DR Bootstrap:
+#   1. Decrypt seed.yaml (from vault/USB/password manager)
+#   2. python scripts/seed_bootstrap.py seed.yaml --target all
+#   3. cd terraform && terraform apply
+#   4. SSH to GitLab server -> run restore-gitlab.sh
+#   5. Verify: curl admin-bot:8080/health
+
+version: 1
+
+# =============================================================================
+# Organization
+# =============================================================================
+organization:
+  name: "ACME Corp"
+  admin_email: "SECRET:admin-email"           # e.g. admin@yourcompany.com
+  environment: "prod"                          # prod | staging | dev
+  labels:
+    project: "acme-gitlab"
+    managed_by: "terraform"
+
+# =============================================================================
+# Infrastructure (Hetzner Cloud)
+# =============================================================================
+infrastructure:
+  hetzner:
+    api_token: "SECRET:hetzner-api-token"      # from console.hetzner.cloud
+    location: "fsn1"                           # fsn1 | nbg1 | hel1
+  servers:
+    gitlab:
+      type: "cpx31"
+      image: "ubuntu-24.04"
+      private_ip: "10.0.1.10"
+    admin_bot:
+      type: "cx32"
+      image: "ubuntu-24.04"
+      private_ip: "10.0.1.30"
+  network:
+    cidr: "10.0.0.0/16"
+    subnet_cidr: "10.0.1.0/24"
+  storage:
+    gitlab_data_volume_gb: 200
+    gitlab_backup_volume_gb: 100
+  ssh:
+    admin_keys:
+      alice: "SECRET:ssh-public-key-alice"     # ssh-ed25519 AAAAC3... alice@example.com
+    trusted_ips:
+      - "203.0.113.10/32"                      # Office/VPN IP in CIDR notation
+
+# =============================================================================
+# GitLab
+# =============================================================================
+gitlab:
+  domain: "SECRET:gitlab-domain"               # e.g. gitlab.yourcompany.com
+  private_token: "SECRET:gitlab-private-token"  # glpat-xxx (api + read_repository scope)
+
+# =============================================================================
+# Backup (BorgBackup + Hetzner Storage Box)
+# =============================================================================
+backup:
+  storage_box:
+    host: "SECRET:storage-box-host"            # e.g. uXXXXX.your-storagebox.de
+    user: "SECRET:storage-box-user"            # e.g. uXXXXX
+  borg:
+    passphrase: "SECRET:borg-passphrase"       # minimum 20 characters
+  retention:
+    keep_hourly: 24
+    keep_daily: 7
+    keep_weekly: 4
+    keep_monthly: 12                           # 12 months (addresses delayed ransomware activation)
+  s3:
+    enabled: false                             # Set to true to enable S3 immutable backups
+    endpoint: "SECRET:s3-endpoint"             # e.g. s3.us-west-002.backblazeb2.com
+    bucket: "SECRET:s3-bucket"                 # e.g. gitlab-immutable-backups
+    access_key: "SECRET:s3-access-key"
+    secret_key: "SECRET:s3-secret-key"
+    retention_days: 90                         # Object Lock retention period
+  local_backup_path: "/var/opt/gitlab/backups"
+  max_backup_age_hours: 4
+
+# =============================================================================
+# Alerting
+# =============================================================================
+alerting:
+  email:
+    enabled: true
+    smtp_host: "smtp.office365.com"
+    smtp_port: 587
+    smtp_user: "SECRET:smtp-user"              # e.g. gitlab-noreply@example.com
+    smtp_password: "SECRET:smtp-password"
+    from_address: "SECRET:email-from"          # e.g. gitlab-admin-bot@example.com
+    recipients:
+      - "SECRET:alert-recipient"               # e.g. admin@example.com
+  webhook:
+    enabled: false
+    url: ""
+  cooldown_minutes: 60
+
+# =============================================================================
+# Claude AI Integration
+# =============================================================================
+claude:
+  enabled: true
+  api_key: "SECRET:claude-api-key"             # sk-ant-xxx from console.anthropic.com
+  model: "claude-sonnet-4-20250514"
+  max_tokens: 4096
+  analysis_interval_minutes: 30
+  use_cli: false
+  cli_path: "claude"
+  cli_timeout: 120
+
+# =============================================================================
+# Bot Runtime
+# =============================================================================
+bot:
+  debug: false
+  log_level: "INFO"
+  api_host: "0.0.0.0"
+  api_port: 8080
+
+# =============================================================================
+# Monitoring Thresholds
+# =============================================================================
+monitoring:
+  disk_warning_percent: 80
+  disk_critical_percent: 90
+  memory_warning_percent: 80
+  memory_critical_percent: 95
+  cpu_warning_percent: 70
+  cpu_critical_percent: 90
+  health_check_interval_seconds: 30
+  resource_check_interval_seconds: 60
+  backup_check_interval_minutes: 15

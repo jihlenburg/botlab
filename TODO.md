@@ -29,6 +29,11 @@
   - `tests/test_alerting.py` - AlertManager tests
   - `tests/test_ai_analyst.py` - AI analyst tests
   - `tests/test_recovery.py` - Recovery and RestoreTester tests
+  - `tests/test_main.py` - FastAPI endpoints and AdminBot lifecycle tests
+  - `tests/test_scheduler.py` - Scheduler wrapper tests
+  - `tests/test_maintenance.py` - Maintenance task tests
+  - `tests/test_ssh.py` - SSH client tests
+  - `tests/test_gitlab_api.py` - GitLab API client tests
 
 - [x] **Restore scripts enhanced**
   - `scripts/restore-gitlab.sh` - Full error handling, verification, rollback support
@@ -97,8 +102,12 @@
 
 ### Phase 5: Security Hardening (Priority: MEDIUM)
 
-- [ ] Configure S3 Object Lock for immutable backups
-- [ ] Set up secondary backup destination
+- [x] Configure S3 Object Lock for immutable backups — `scripts/backup-to-s3.sh`
+- [x] Set up secondary backup destination — S3 immutable backup script
+- [x] Implement append-only Borg backup — `scripts/setup-borg-append-only.sh`
+- [x] Extend backup retention to 12 months — updated defaults
+- [x] Add backup integrity verification — `BackupMonitor.verify_integrity()`
+- [x] Add S3 backup to seed configuration — `backup.s3` in `seed_schema.py`
 - [ ] Create offline backup recovery kit
 - [ ] Configure fail2ban on all servers
 - [ ] Security audit of configurations

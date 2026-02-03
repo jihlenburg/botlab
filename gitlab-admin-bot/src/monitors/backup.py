@@ -20,6 +20,9 @@ logger = structlog.get_logger(__name__)
 BACKUP_AGE_HOURS = Gauge("gitlab_backup_age_hours", "Age of most recent backup in hours")
 BACKUP_SIZE_GB = Gauge("gitlab_backup_size_gb", "Size of most recent backup in GB")
 BACKUP_SUCCESS = Gauge("gitlab_backup_success", "Last backup was successful")
+BACKUP_INTEGRITY = Gauge(
+    "gitlab_backup_integrity", "Borg repository integrity (1=ok, 0=fail, -1=not checked)"
+)
 
 
 class BackupMonitor(BaseMonitor):
@@ -198,6 +201,54 @@ class BackupMonitor(BaseMonitor):
             "status": self._last_result.status.value if self._last_result else "unknown",
             **self._last_status,
         }
+
+    async def verify_integrity(self) -> dict[str, Any]:
+        """Verify Borg repository integrity.
+
+        Runs ``borg check --repository-only`` which validates the repository
+        structure without reading every archive.  This is slow (~minutes) so
+        it should be called weekly or on-demand, **not** on every hourly check.
+        """
+        if not self.settings.borg_repo:
+            BACKUP_INTEGRITY.set(-1)
+            return {"skipped": True, "reason": "No Borg repo configured"}
+
+        logger.info("Starting Borg integrity verification")
+
+        try:
+            # borg check produces no output on success; any output indicates a problem.
+            # We merge stderr into stdout (2>&1) and use the exit code via a wrapper:
+            # exit code 0 → "BORG_CHECK_OK", non-zero → error output.
+            cmd = (
+                "source /etc/gitlab-backup.conf && "
+                "borg check --repository-only $BORG_REPO 2>&1 && echo BORG_CHECK_OK"
+            )
+            output = await self.ssh.run_command(cmd, timeout=1800)
+
+            passed = "BORG_CHECK_OK" in output
+
+            BACKUP_INTEGRITY.set(1 if passed else 0)
+
+            if not passed:
+                await self.alerts.send_alert(
+                    severity="critical",
+                    title="Borg Repository Integrity Check Failed",
+                    message=f"borg check reported issues: {output[-500:]}",
+                    details={"output": output[-2000:]},
+                )
+
+            logger.info("Borg integrity check completed", passed=passed)
+            return {"passed": passed, "output": output[-1000:]}
+
+        except Exception as e:
+            BACKUP_INTEGRITY.set(0)
+            logger.error("Borg integrity check failed", error=str(e))
+            await self.alerts.send_alert(
+                severity="critical",
+                title="Borg Integrity Check Error",
+                message=f"Failed to run borg check: {e}",
+            )
+            return {"passed": False, "error": str(e)}
 
     async def trigger_backup(self) -> dict[str, Any]:
         """Trigger an immediate backup."""

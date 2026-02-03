@@ -78,6 +78,7 @@ botlab/
 ├── CLAUDE.md                       # This file (AI assistant guidance)
 ├── README.md                       # Project overview and quick start
 ├── TODO.md                         # Implementation status and task tracking
+├── seed.example.yaml               # Seed config template (copy to seed.yaml)
 ├── docs/
 │   ├── DESIGN.md                   # Master design document (READ FIRST)
 │   ├── SECURITY-ASSESSMENT.md      # Security & ransomware analysis
@@ -100,7 +101,11 @@ botlab/
 │   ├── Dockerfile
 │   └── docker-compose.yml
 ├── scripts/                        # Deployment and maintenance scripts
+│   ├── seed_schema.py              # Pydantic model for seed.yaml validation
+│   ├── seed_bootstrap.py           # Generate configs from seed.yaml
 │   ├── setup-borg-backup.sh        # BorgBackup setup
+│   ├── setup-borg-append-only.sh   # Append-only Borg hardening (ransomware protection)
+│   ├── backup-to-s3.sh             # S3 immutable backup (Object Lock)
 │   ├── restore-gitlab.sh           # DR restore procedure
 │   └── verify-backup.sh            # Backup verification
 ├── .github/workflows/              # CI/CD pipeline
@@ -108,6 +113,39 @@ botlab/
 ├── Makefile                        # Common development commands
 └── .pre-commit-config.yaml         # Pre-commit hooks configuration
 ```
+
+## Seed Configuration (Single Source of Truth)
+
+`seed.yaml` is the unified config file that generates all downstream configs:
+
+```bash
+# Validate seed.yaml
+python scripts/seed_bootstrap.py seed.yaml --validate
+
+# Generate all config files
+python scripts/seed_bootstrap.py seed.yaml --target all
+
+# Preview changes without writing
+python scripts/seed_bootstrap.py seed.yaml --target all --diff
+
+# Generate a specific target
+python scripts/seed_bootstrap.py seed.yaml --target terraform
+python scripts/seed_bootstrap.py seed.yaml --target bot-env
+python scripts/seed_bootstrap.py seed.yaml --target bot-config
+python scripts/seed_bootstrap.py seed.yaml --target borg-conf
+python scripts/seed_bootstrap.py seed.yaml --target s3-conf
+```
+
+**Files generated from seed.yaml:**
+| Target | Output File |
+|--------|-------------|
+| `terraform` | `terraform/terraform.tfvars` |
+| `bot-env` | `gitlab-admin-bot/.env` |
+| `bot-config` | `gitlab-admin-bot/config/config.yaml` |
+| `borg-conf` | stdout (`/etc/gitlab-backup.conf` content) |
+| `s3-conf` | stdout (`/etc/gitlab-s3-backup.conf` content) |
+
+**Important:** `seed.yaml` contains secrets and is gitignored. Use `seed.example.yaml` as a template.
 
 ## Development Commands
 
@@ -157,7 +195,7 @@ Additionally, `ruff check src/ tests/` and `pytest tests/` must pass.
 | Backup Strategy | 3-2-1 with immutable tier | DESIGN.md 6.3.3, SECURITY-ASSESSMENT.md 3.3 |
 | Ransomware Protection | Append-only Borg + S3 WORM | DESIGN.md 9, SECURITY-ASSESSMENT.md 3 |
 | Bot Architecture | Claude Code CLI + MCP | INTEGRATOR-BOT-PLAN.md |
-| Project Policies | Per-repo .gitlab-bot.yml | DESIGN.md 7.8, INTEGRATOR-BOT-PLAN.md 7 |
+| Project Policies | Per-repo .gitlab-bot.yml (Planned) | DESIGN.md 7.8, INTEGRATOR-BOT-PLAN.md 7 |
 | DR Automation | Human-in-the-loop approval | INTEGRATOR-BOT-PLAN.md 6.6 |
 
 ## Key Files
@@ -173,8 +211,13 @@ Additionally, `ruff check src/ tests/` and `pytest tests/` must pass.
 | `gitlab-admin-bot/src/main.py` | Bot entry point |
 | `gitlab-admin-bot/config/config.yaml` | Bot configuration |
 | `scripts/setup-borg-backup.sh` | BorgBackup initialization |
+| `scripts/setup-borg-append-only.sh` | Append-only Borg hardening (ransomware protection) |
+| `scripts/backup-to-s3.sh` | S3 immutable backup with Object Lock |
 | `scripts/restore-gitlab.sh` | Disaster recovery procedure |
 | `TODO.md` | Implementation status and task tracking |
+| `seed.example.yaml` | Seed config template (single source of truth) |
+| `scripts/seed_bootstrap.py` | Generate downstream configs from seed.yaml |
+| `scripts/seed_schema.py` | Pydantic validation model for seed.yaml |
 | `.gitlab-bot.yml` (per-project) | Project-specific bot policies |
 
 ## Documentation Maintenance

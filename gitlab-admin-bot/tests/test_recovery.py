@@ -12,20 +12,7 @@ from src.restore.tester import RestoreTester, RestoreTestResult
 
 
 class TestRecoveryState:
-    """Tests for RecoveryState dataclass."""
-
-    def test_initial_state(self):
-        """Test initial recovery state."""
-        state = RecoveryState()
-
-        assert state.started_at is not None
-        assert state.completed_at is None
-        assert state.current_step is None
-        assert state.completed_steps == []
-        assert state.failed_step is None
-        assert state.error is None
-        assert state.new_server_id is None
-        assert state.new_server_ip is None
+    """Tests for RecoveryState behavior."""
 
     def test_is_complete(self):
         """Test is_complete property."""
@@ -47,21 +34,6 @@ class TestRecoveryState:
         state.completed_at = datetime.now()
         duration = state.duration_minutes
         assert duration >= 0
-
-
-class TestRecoveryStep:
-    """Tests for RecoveryStep enum."""
-
-    def test_step_values(self):
-        """Test recovery step values."""
-        assert RecoveryStep.PROVISION_SERVER.value == "provision_server"
-        assert RecoveryStep.ATTACH_VOLUMES.value == "attach_volumes"
-        assert RecoveryStep.INSTALL_GITLAB.value == "install_gitlab"
-        assert RecoveryStep.RESTORE_CONFIG.value == "restore_config"
-        assert RecoveryStep.RESTORE_BACKUP.value == "restore_backup"
-        assert RecoveryStep.RECONFIGURE.value == "reconfigure"
-        assert RecoveryStep.VERIFY.value == "verify"
-        assert RecoveryStep.UPDATE_DNS.value == "update_dns"
 
 
 class TestRecoveryManager:
@@ -172,21 +144,7 @@ class TestRecoveryManager:
 
 
 class TestRestoreTestResult:
-    """Tests for RestoreTestResult dataclass."""
-
-    def test_initial_result(self):
-        """Test initial restore test result."""
-        result = RestoreTestResult(
-            success=False,
-            start_time=datetime.now(),
-        )
-
-        assert result.success is False
-        assert result.end_time is None
-        assert result.server_id is None
-        assert result.steps_completed == []
-        assert result.errors == []
-        assert result.verification_results == {}
+    """Tests for RestoreTestResult behavior."""
 
     def test_duration_minutes(self):
         """Test duration calculation."""

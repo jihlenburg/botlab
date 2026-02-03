@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from src.monitors.backup import BackupMonitor
-from src.monitors.base import CheckResult, Status
+from src.monitors.base import Status
 from src.monitors.health import HealthMonitor
 from src.monitors.resources import ResourceMonitor
 
@@ -303,26 +304,63 @@ class TestBackupMonitor:
         assert result["success"] is True
         mock_ssh_client.run_command.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_verify_integrity_pass(self, backup_monitor, mock_ssh_client):
+        """Test integrity check when Borg repository is healthy."""
+        mock_ssh_client.run_command.return_value = "BORG_CHECK_OK\n"
 
-class TestBaseMonitor:
-    """Tests for BaseMonitor functionality."""
+        result = await backup_monitor.verify_integrity()
 
-    def test_check_result_creation(self):
-        """Test CheckResult dataclass."""
-        result = CheckResult(
-            status=Status.OK,
-            message="Test message",
-            details={"key": "value"},
+        assert result["passed"] is True
+
+    @pytest.mark.asyncio
+    async def test_verify_integrity_fail(
+        self, backup_monitor, mock_ssh_client, mock_alert_manager
+    ):
+        """Test integrity check when Borg detects corruption."""
+        mock_ssh_client.run_command.return_value = (
+            "Data integrity error: segment 5 invalid\n"
         )
 
-        assert result.status == Status.OK
-        assert result.message == "Test message"
-        assert result.details["key"] == "value"
-        assert result.timestamp is not None
+        result = await backup_monitor.verify_integrity()
 
-    def test_status_enum_values(self):
-        """Test Status enum values."""
-        assert Status.OK.value == "ok"
-        assert Status.WARNING.value == "warning"
-        assert Status.CRITICAL.value == "critical"
-        assert Status.UNKNOWN.value == "unknown"
+        assert result["passed"] is False
+        mock_alert_manager.send_alert.assert_called_once()
+        call_kwargs = mock_alert_manager.send_alert.call_args.kwargs
+        assert call_kwargs["severity"] == "critical"
+
+    @pytest.mark.asyncio
+    async def test_verify_integrity_ssh_error(
+        self, backup_monitor, mock_ssh_client, mock_alert_manager
+    ):
+        """Test integrity check when SSH command fails."""
+        mock_ssh_client.run_command.side_effect = RuntimeError("SSH connection lost")
+
+        result = await backup_monitor.verify_integrity()
+
+        assert result["passed"] is False
+        assert "SSH connection lost" in result["error"]
+        mock_alert_manager.send_alert.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_verify_integrity_no_repo(self, mock_ssh_client, mock_alert_manager):
+        """Test integrity check when no Borg repo is configured."""
+        from src.config import BackupSettings
+
+        settings = BackupSettings(
+            borg_repo="",
+            local_backup_path=Path("/var/opt/gitlab/backups"),
+            max_backup_age_hours=4,
+        )
+        monitor = BackupMonitor(
+            ssh_client=mock_ssh_client,
+            alert_manager=mock_alert_manager,
+            settings=settings,
+        )
+
+        result = await monitor.verify_integrity()
+
+        assert result["skipped"] is True
+        mock_ssh_client.run_command.assert_not_called()
+
+

@@ -96,84 +96,38 @@ docker compose up -d
 
 ## Project Structure
 
+For the full project tree see `CLAUDE.md`. Key directories:
+
 ```
 botlab/
-├── README.md                    # This file
-├── CLAUDE.md                    # AI assistant guidance
-├── TODO.md                      # Implementation status and task tracking
-├── docs/
-│   ├── DESIGN.md                # Master design document
-│   ├── SECURITY-ASSESSMENT.md   # Security & DR analysis
-│   └── INTEGRATOR-BOT-PLAN.md   # Claude Code CLI bot architecture
-├── terraform/                   # Infrastructure as code
-│   ├── versions.tf              # Provider versions
-│   ├── variables.tf             # Input variables
-│   ├── provider.tf              # Hetzner provider
-│   ├── network.tf               # VPC and subnets
-│   ├── servers.tf               # Compute instances
-│   ├── storage.tf               # Block volumes
-│   ├── load_balancer.tf         # Load balancer
-│   ├── firewalls.tf             # Firewall rules
-│   ├── ssh_keys.tf              # SSH key management
-│   ├── outputs.tf               # Output values
-│   ├── terraform.tfvars.example # Configuration template
-│   └── templates/               # Cloud-init templates
-│       └── gitlab-cloud-init.yaml
-├── gitlab-admin-bot/            # AI-powered admin bot
-│   ├── src/
-│   │   ├── main.py              # Entry point
-│   │   ├── config.py            # Configuration
-│   │   ├── scheduler.py         # APScheduler
-│   │   ├── ai/                  # Claude API integration
-│   │   ├── monitors/            # Health, resource, backup monitors
-│   │   ├── alerting/            # Alert management
-│   │   ├── maintenance/         # Maintenance tasks
-│   │   ├── restore/             # DR automation
-│   │   └── utils/               # SSH, GitLab API clients
-│   ├── tests/                   # Test suite
-│   │   ├── conftest.py          # Shared fixtures
-│   │   ├── test_monitors.py     # Monitor tests
-│   │   ├── test_alerting.py     # Alert manager tests
-│   │   ├── test_ai_analyst.py   # AI integration tests
-│   │   └── test_recovery.py     # Recovery tests
-│   ├── config/config.yaml       # Configuration template
-│   ├── .env.example             # Environment variables template
-│   ├── Dockerfile
-│   └── docker-compose.yml
-├── scripts/                     # Utility scripts
-│   ├── gitlab-setup.sh          # GitLab installation
-│   ├── gitlab.rb.template       # GitLab configuration
-│   ├── setup-borg-backup.sh     # Backup setup (interactive)
-│   ├── verify-backup.sh         # Backup verification (--json, --quiet)
-│   └── restore-gitlab.sh        # DR restore procedure
-├── .github/workflows/           # CI/CD
-│   └── test.yml                 # pytest, ruff, mypy, shellcheck, terraform
-├── Makefile                     # Development commands (make help)
-└── .pre-commit-config.yaml      # Pre-commit hooks
+├── docs/                        # DESIGN.md, SECURITY-ASSESSMENT.md, INTEGRATOR-BOT-PLAN.md
+├── terraform/                   # Hetzner Cloud infrastructure (Terraform)
+├── gitlab-admin-bot/            # AI-powered admin bot (Python, FastAPI)
+│   ├── src/                     # Source code (monitors, alerting, AI, maintenance, restore)
+│   └── tests/                   # Test suite (pytest)
+├── scripts/                     # Deployment, backup, and recovery scripts
+│   ├── seed_schema.py           # Seed config validation (Pydantic)
+│   ├── seed_bootstrap.py        # Generate all downstream configs from seed.yaml
+│   ├── setup-borg-backup.sh     # BorgBackup setup (interactive)
+│   ├── setup-borg-append-only.sh # Append-only Borg hardening
+│   ├── backup-to-s3.sh          # S3 immutable backup (Object Lock)
+│   ├── restore-gitlab.sh        # DR restore procedure
+│   └── verify-backup.sh         # Backup verification
+├── seed.example.yaml            # Single source of truth config template
+└── .github/workflows/test.yml   # CI: pytest, ruff, mypy, shellcheck, terraform
 ```
 
 ## Disaster Recovery
 
-**Strategy**: Backup-based recovery (no hot standby)
+**Strategy**: 3-2-1 backup with immutable tier (no hot standby). ~1h RPO, ~1-2h RTO.
 
-| Metric | Target |
-|--------|--------|
-| RPO | ~1 hour (hourly backups to Storage Box) |
-| RTO | ~1-2 hours (provision + restore) |
+| Tier | Frequency | Retention | Protection |
+|------|-----------|-----------|------------|
+| Local | Hourly | 24 hours | None (staging only) |
+| Borg (Storage Box) | Hourly | 12 months | Append-only (ransomware-resistant) |
+| S3 (Object Lock) | Weekly | 90 days | WORM / immutable |
 
-**Backup Schedule**:
-- Hourly: GitLab backup to local staging
-- Every 4 hours: Sync to Storage Box (encrypted with BorgBackup)
-- Daily: Full consistency check
-
-**Recovery Procedure**:
-1. Provision new CPX31 via Terraform
-2. Install GitLab CE
-3. Restore from latest BorgBackup
-4. Update DNS
-5. Verify services
-
-See `docs/DESIGN.md` Section 6 for detailed procedures.
+See `docs/DESIGN.md` Section 6 and `docs/SECURITY-ASSESSMENT.md` for details.
 
 ## Monitoring
 
@@ -186,24 +140,11 @@ The Admin Bot provides:
 
 Access Grafana dashboards at `http://admin-bot:3000` (internal network).
 
-## Per-Project Bot Configuration
+## Per-Project Bot Configuration (Planned)
 
-Projects can customize bot behavior via `.gitlab-bot.yml` files:
+> **Status**: Planned — not yet implemented. The policy file format is defined but the bot does not yet scan or enforce `.gitlab-bot.yml` files.
 
-```yaml
-# .gitlab-bot.yml - Optional per-project configuration
-version: 1
-owners:
-  primary: team-lead@example.com
-monitors:
-  stale_branches: { enabled: true, max_age_days: 30 }
-  ci_failures: { alert_after_consecutive: 3 }
-compliance:
-  require_code_review: true
-  min_approvers: 1
-```
-
-See `docs/DESIGN.md` Section 7.8 for full specification.
+See `docs/DESIGN.md` Section 7.8 and `docs/INTEGRATOR-BOT-PLAN.md` Section 7 for the specification.
 
 ## Documentation
 

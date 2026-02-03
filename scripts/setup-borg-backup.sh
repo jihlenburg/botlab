@@ -135,7 +135,7 @@ export BORG_RSH="ssh -i $SSH_KEY_PATH -o StrictHostKeyChecking=accept-new"
 export BACKUP_KEEP_HOURLY=24
 export BACKUP_KEEP_DAILY=7
 export BACKUP_KEEP_WEEKLY=4
-export BACKUP_KEEP_MONTHLY=6
+export BACKUP_KEEP_MONTHLY=12
 EOF
 
 chmod 600 /etc/gitlab-backup.conf
@@ -214,8 +214,8 @@ borg create --stats --compression zstd \
     /etc/gitlab/gitlab-secrets.json \
     >> "$LOG_FILE" 2>&1
 
-# Prune old backups (keep hourly for 24h, daily for 7d, weekly for 4w, monthly for 6m)
-borg prune --keep-hourly=24 --keep-daily=7 --keep-weekly=4 --keep-monthly=6 \
+# Prune old backups (keep hourly for 24h, daily for 7d, weekly for 4w, monthly for 12m)
+borg prune --keep-hourly=24 --keep-daily=7 --keep-weekly=4 --keep-monthly=12 \
     "$BORG_REPO" >> "$LOG_FILE" 2>&1
 
 # Clean local backups older than 24 hours

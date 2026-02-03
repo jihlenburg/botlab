@@ -113,17 +113,18 @@ class Settings(BaseSettings):
 
 
 def load_config(config_path: Path | None = None) -> Settings:
-    """Load configuration from YAML file and environment variables."""
-    settings = Settings()
+    """Load configuration from YAML file and environment variables.
 
+    YAML values are used as defaults; environment variables take precedence
+    (handled by pydantic-settings).
+    """
     if config_path and config_path.exists():
         with open(config_path) as f:
             yaml_config = yaml.safe_load(f)
-            if yaml_config:
-                # Merge YAML config (env vars take precedence)
-                pass  # Settings from env vars already loaded
+            if yaml_config and isinstance(yaml_config, dict):
+                return Settings.model_validate(yaml_config)
 
-    return settings
+    return Settings()
 
 
 # Global settings instance
