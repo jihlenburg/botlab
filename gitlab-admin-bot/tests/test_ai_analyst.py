@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.ai.analyst import AIAnalyst, AnalysisResult, RecommendedAction, Urgency
-from src.ai.claude_cli import CLISettings, ClaudeCLI, ClaudeCLIError
+from src.ai.claude_cli import ClaudeCLI, ClaudeCLIError, CLISettings
 
 
 class TestUrgency:
@@ -337,10 +337,15 @@ class TestClaudeCLI:
     def mock_subprocess_success(self):
         """Mock successful subprocess execution."""
         async def mock_communicate():
-            return (
-                b'{"result": "{\\"summary\\": \\"System healthy\\", \\"actions_needed\\": false, \\"urgency\\": \\"info\\", \\"recommendations\\": [], \\"actions\\": []}"}',
-                b"",
-            )
+            inner = json.dumps({
+                "summary": "System healthy",
+                "actions_needed": False,
+                "urgency": "info",
+                "recommendations": [],
+                "actions": [],
+            })
+            outer = json.dumps({"result": inner}).encode()
+            return (outer, b"")
 
         mock_process = MagicMock()
         mock_process.communicate = mock_communicate
@@ -536,14 +541,13 @@ class TestAIAnalystCLIMode:
     @pytest.fixture
     def ai_analyst_cli(self, claude_settings_cli, mock_cli):
         """Create an AIAnalyst in CLI mode with mocked CLI."""
-        with patch("shutil.which", return_value="/usr/local/bin/claude"):
-            with patch(
-                "src.ai.claude_cli.ClaudeCLI",
-                return_value=mock_cli,
-            ):
-                analyst = AIAnalyst(claude_settings_cli)
-                analyst._cli = mock_cli
-                return analyst
+        with patch("shutil.which", return_value="/usr/local/bin/claude"), patch(
+            "src.ai.claude_cli.ClaudeCLI",
+            return_value=mock_cli,
+        ):
+            analyst = AIAnalyst(claude_settings_cli)
+            analyst._cli = mock_cli
+            return analyst
 
     @pytest.mark.asyncio
     async def test_analyze_via_cli(
