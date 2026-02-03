@@ -223,7 +223,7 @@ if [[ -n "$BORG_ARCHIVES" ]]; then
     check "Borg archives exist" "0"
     if [[ "$QUIET" == "false" ]] && [[ "$OUTPUT_JSON" == "false" ]]; then
         echo "  Recent archives:"
-        echo "$BORG_ARCHIVES" | sed 's/^/    /'
+        while IFS= read -r line; do echo "    $line"; done <<< "$BORG_ARCHIVES"
     fi
 
     # Check age of most recent archive
@@ -326,7 +326,7 @@ if [[ -f "$LOG_FILE" ]]; then
     if [[ -n "$RECENT_ERRORS" ]]; then
         log_warn "Recent errors in backup log:"
         if [[ "$OUTPUT_JSON" == "false" ]]; then
-            echo "$RECENT_ERRORS" | sed 's/^/    /'
+            while IFS= read -r line; do echo "    $line"; done <<< "$RECENT_ERRORS"
         fi
     fi
 else

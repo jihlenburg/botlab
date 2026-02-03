@@ -18,7 +18,6 @@ set -euo pipefail
 # Configuration
 # =============================================================================
 
-SCRIPT_NAME=$(basename "$0")
 RESTORE_DIR="/tmp/gitlab-restore-$$"
 BACKUP_DIR="/var/opt/gitlab/backups"
 LOG_FILE="/var/log/gitlab-restore.log"
@@ -30,7 +29,8 @@ EXIT_ERROR=1
 EXIT_CONFIG_ERROR=2
 EXIT_BACKUP_ERROR=3
 EXIT_RESTORE_ERROR=4
-EXIT_VERIFY_ERROR=5
+# shellcheck disable=SC2034
+EXIT_VERIFY_ERROR=5  # reserved for future verify functions
 
 # Colors for output
 RED='\033[0;31m'
@@ -290,7 +290,7 @@ copy_backup_file() {
 
     # Extract timestamp from backup filename
     # Format: TIMESTAMP_YYYY_MM_DD_VERSION_gitlab_backup.tar
-    BACKUP_TIMESTAMP=$(echo "$BACKUP_FILENAME" | sed 's/_gitlab_backup.tar$//')
+    BACKUP_TIMESTAMP="${BACKUP_FILENAME%_gitlab_backup.tar}"
 
     log_info "Backup timestamp: $BACKUP_TIMESTAMP"
 }

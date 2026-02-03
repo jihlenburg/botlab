@@ -32,9 +32,9 @@ echo ""
 # Configuration
 # =============================================================================
 
-read -p "Enter Storage Box hostname (e.g., uXXXXX.your-storagebox.de): " STORAGE_BOX_HOST
-read -p "Enter Storage Box username (e.g., uXXXXX): " STORAGE_BOX_USER
-read -sp "Enter Borg encryption passphrase (min 20 chars): " BORG_PASSPHRASE
+read -rp "Enter Storage Box hostname (e.g., uXXXXX.your-storagebox.de): " STORAGE_BOX_HOST
+read -rp "Enter Storage Box username (e.g., uXXXXX): " STORAGE_BOX_USER
+read -rsp "Enter Borg encryption passphrase (min 20 chars): " BORG_PASSPHRASE
 echo ""
 
 if [[ ${#BORG_PASSPHRASE} -lt 20 ]]; then
@@ -53,7 +53,7 @@ log_info "Step 1: Setting up SSH key for Storage Box..."
 
 if [[ -f "$SSH_KEY_PATH" ]]; then
     log_warn "SSH key already exists at $SSH_KEY_PATH"
-    read -p "Overwrite? (yes/no): " OVERWRITE
+    read -rp "Overwrite? (yes/no): " OVERWRITE
     if [[ "$OVERWRITE" == "yes" ]]; then
         rm -f "$SSH_KEY_PATH" "${SSH_KEY_PATH}.pub"
     else
@@ -77,7 +77,7 @@ echo "Add this key to Storage Box via:"
 echo "  1. Hetzner Robot Panel -> Storage Box -> SSH keys"
 echo "  2. Or append to ~/.ssh/authorized_keys on Storage Box"
 echo ""
-read -p "Press Enter once the key is added to the Storage Box..."
+read -rp "Press Enter once the key is added to the Storage Box..."
 
 # =============================================================================
 # Step 2: Test SSH connection
@@ -106,7 +106,7 @@ export BORG_RSH="ssh -i $SSH_KEY_PATH -o StrictHostKeyChecking=accept-new"
 # Check if repo already exists
 if borg info "$BORG_REPO" &>/dev/null; then
     log_warn "Borg repository already exists at $BORG_REPO"
-    read -p "Continue with existing repo? (yes/no): " CONTINUE
+    read -rp "Continue with existing repo? (yes/no): " CONTINUE
     if [[ "$CONTINUE" != "yes" ]]; then
         exit 1
     fi
