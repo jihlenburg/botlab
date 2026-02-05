@@ -204,7 +204,7 @@ GitLab Admin Bot
 
         # Add details as fields
         for key, value in alert.details.items():
-            if isinstance(value, (str, int, float, bool)):
+            if isinstance(value, str | int | float | bool):
                 fields.append(
                     {"title": key, "value": str(value), "short": True}
                 )

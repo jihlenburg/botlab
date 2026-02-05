@@ -124,8 +124,8 @@ seed-diff: ## Show diff of what seed would generate vs existing files
 # Scripts
 # =============================================================================
 
-shellcheck: ## Run shellcheck on all scripts
-	shellcheck scripts/*.sh
+shellcheck: ## Run shellcheck on all scripts (requires shellcheck installed)
+	@if command -v shellcheck >/dev/null 2>&1; then shellcheck scripts/*.sh; else echo "shellcheck not installed, skipping"; fi
 
 # =============================================================================
 # Cleanup
@@ -147,4 +147,4 @@ clean: ## Clean up generated files
 
 all: install check ## Install and run all checks
 
-ci: lint type-check test ## Run CI pipeline locally
+ci: lint type-check test shellcheck ## Run CI pipeline locally (Python checks)
