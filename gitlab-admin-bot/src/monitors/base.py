@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 import structlog
@@ -14,7 +14,7 @@ from prometheus_client import Counter, Gauge
 logger = structlog.get_logger(__name__)
 
 
-class Status(str, Enum):
+class Status(StrEnum):
     """Monitor status levels."""
 
     OK = "ok"

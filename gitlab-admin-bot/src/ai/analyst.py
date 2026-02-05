@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 import structlog
@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 logger = structlog.get_logger(__name__)
 
 
-class Urgency(str, Enum):
+class Urgency(StrEnum):
     """Urgency levels for recommended actions."""
 
     CRITICAL = "critical"

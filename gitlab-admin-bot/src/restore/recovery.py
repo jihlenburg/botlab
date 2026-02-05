@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 import structlog
@@ -22,7 +22,7 @@ from src.utils.ssh import SSHClient
 logger = structlog.get_logger(__name__)
 
 
-class RecoveryStep(str, Enum):
+class RecoveryStep(StrEnum):
     """Recovery procedure steps."""
 
     PROVISION_SERVER = "provision_server"
