@@ -2,6 +2,8 @@
 # Install: pip install pre-commit && pre-commit install --hook-type pre-commit --hook-type pre-push
 # Run manually: pre-commit run --all-files
 
+default_stages: [pre-commit]
+
 repos:
   # General hooks
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -18,7 +20,6 @@ repos:
       - id: detect-private-key
       - id: no-commit-to-branch
         args: [--branch, main]
-        stages: [pre-commit]  # Only on commit, not push
 
   # Python - Ruff (linting + formatting)
   - repo: https://github.com/astral-sh/ruff-pre-commit
