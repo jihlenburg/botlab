@@ -1,5 +1,5 @@
 # Pre-commit hooks for GitLab Infrastructure project
-# Install: pip install pre-commit && pre-commit install
+# Install: pip install pre-commit && pre-commit install --hook-type pre-commit --hook-type pre-push
 # Run manually: pre-commit run --all-files
 
 repos:
@@ -18,10 +18,11 @@ repos:
       - id: detect-private-key
       - id: no-commit-to-branch
         args: [--branch, main]
+        stages: [pre-commit]  # Only on commit, not push
 
   # Python - Ruff (linting + formatting)
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.1.14
+    rev: v0.9.2
     hooks:
       - id: ruff
         args: [--fix]
@@ -68,3 +69,13 @@ repos:
     hooks:
       - id: markdownlint
         args: [--fix, --disable, MD013, MD033, MD041, --]
+
+  # Pre-push: Run full test suite before pushing
+  - repo: local
+    hooks:
+      - id: pytest
+        name: pytest
+        entry: bash -c 'cd gitlab-admin-bot && pytest tests/ -q'
+        language: system
+        stages: [pre-push]
+        pass_filenames: false
