@@ -1,6 +1,6 @@
 # ACME Corp GitLab Infrastructure
 
-Self-hosted GitLab CE on Hetzner Cloud with automated monitoring and disaster recovery.
+Self-hosted GitLab CE on Hetzner Cloud with cron-driven backups and Prometheus/Alertmanager monitoring.
 
 ## Overview
 
@@ -9,7 +9,7 @@ Self-hosted GitLab CE on Hetzner Cloud with automated monitoring and disaster re
 | **Scale** | 10-20 developers |
 | **Features** | Git LFS, Azure AD SSO, CI/CD |
 | **Hosting** | Hetzner Cloud (EU) |
-| **Cost** | ~70 EUR/month |
+| **Cost** | ~63 EUR/month |
 | **RTO** | ~1-2 hours |
 | **RPO** | ~1 hour (hourly backups) |
 
@@ -23,25 +23,25 @@ Self-hosted GitLab CE on Hetzner Cloud with automated monitoring and disaster re
                       │    /LB    │
                       └─────┬─────┘
                             │
-              ┌─────────────┼─────────────┐
-              │             │             │
-         ┌────▼────┐   ┌────▼────┐   ┌────▼────┐
-         │ GitLab  │   │  Admin  │   │ Object  │
-         │ Primary │◄──│   Bot   │   │ Storage │
-         │ (CPX31) │   │ (CX32)  │   │  (S3)   │
-         └────┬────┘   └────┬────┘   └─────────┘
-              │             │
-         ┌────▼─────────────▼────┐
-         │    Private Network    │
-         │      10.0.0.0/16      │
-         └───────────┬───────────┘
-                     │
-              ┌──────▼──────┐
-              │ Storage Box │
-              │  (Backups)  │
-              │   BX21 5TB  │
-              └─────────────┘
+                       ┌────▼────┐         ┌─────────┐
+                       │ GitLab  │         │ Object  │
+                       │ Primary │────────►│ Storage │
+                       │ (CPX31) │         │  (S3)   │
+                       └────┬────┘         └─────────┘
+                            │
+                       ┌────▼─────────────────────┐
+                       │ Private Network          │
+                       │   10.0.0.0/16            │
+                       └────┬─────────────────────┘
+                            │
+                     ┌──────▼──────┐
+                     │ Storage Box │
+                     │  (Backups)  │
+                     │  BX21 5TB   │
+                     └─────────────┘
 ```
+
+Prometheus, Alertmanager, Grafana, and the hourly backup cron jobs all run on the GitLab server itself; there is no separate automation host.
 
 ## Technology Stack
 
@@ -51,9 +51,8 @@ All components are **100% open source** (no license fees).
 |-----------|------------|---------|
 | Version Control | GitLab CE | MIT |
 | Infrastructure | Terraform | MPL 2.0 |
-| Admin Bot | Python, FastAPI | MIT |
-| Backups | BorgBackup | BSD |
-| Monitoring | Prometheus + Grafana | Apache 2.0 |
+| Monitoring | Prometheus + Grafana + Alertmanager | Apache 2.0 |
+| Backups | BorgBackup (+ optional S3 Object Lock) | BSD |
 
 ## Quick Start
 
@@ -61,7 +60,6 @@ All components are **100% open source** (no license fees).
 
 - Hetzner Cloud account
 - Terraform >= 1.0
-- Python >= 3.12
 - Azure AD tenant (for SSO)
 
 ### Deploy Infrastructure
@@ -87,11 +85,13 @@ sudo EXTERNAL_URL="https://gitlab.example.com" apt-get install gitlab-ce
 
 See `docs/DESIGN.md` for complete configuration.
 
-### Deploy Admin Bot
+### Set up backups
 
 ```bash
-cd gitlab-admin-bot
-docker compose up -d
+scripts/setup-borg-backup.sh           # initialize repo (interactive)
+scripts/setup-borg-append-only.sh      # harden with append-only sub-account
+# Optional: weekly immutable S3 copy
+scripts/backup-to-s3.sh                # invoked weekly by cron
 ```
 
 ## Project Structure
@@ -100,21 +100,18 @@ For the full project tree see `CLAUDE.md`. Key directories:
 
 ```
 botlab/
-├── docs/                        # DESIGN.md, SECURITY-ASSESSMENT.md, INTEGRATOR-BOT-PLAN.md
-├── terraform/                   # Hetzner Cloud infrastructure (Terraform)
-├── gitlab-admin-bot/            # AI-powered admin bot (Python, FastAPI)
-│   ├── src/                     # Source code (monitors, alerting, AI, maintenance, restore)
-│   └── tests/                   # Test suite (pytest)
-├── scripts/                     # Deployment, backup, and recovery scripts
-│   ├── seed_schema.py           # Seed config validation (Pydantic)
-│   ├── seed_bootstrap.py        # Generate all downstream configs from seed.yaml
-│   ├── setup-borg-backup.sh     # BorgBackup setup (interactive)
-│   ├── setup-borg-append-only.sh # Append-only Borg hardening
-│   ├── backup-to-s3.sh          # S3 immutable backup (Object Lock)
-│   ├── restore-gitlab.sh        # DR restore procedure
-│   └── verify-backup.sh         # Backup verification
-├── seed.example.yaml            # Single source of truth config template
-└── .github/workflows/test.yml   # CI: pytest, ruff, mypy, shellcheck, terraform
+├── docs/                           # DESIGN.md, SECURITY-ASSESSMENT.md
+├── terraform/                      # Hetzner Cloud infrastructure (Terraform)
+├── scripts/                        # Deployment, backup, recovery, seed bootstrap
+│   ├── seed_schema.py              # Seed config validation (Pydantic)
+│   ├── seed_bootstrap.py           # Generate all downstream configs from seed.yaml
+│   ├── setup-borg-backup.sh        # BorgBackup setup (interactive)
+│   ├── setup-borg-append-only.sh   # Append-only Borg hardening
+│   ├── backup-to-s3.sh             # S3 immutable backup (Object Lock)
+│   ├── restore-gitlab.sh           # DR restore procedure (operator-driven)
+│   └── verify-backup.sh            # Backup verification
+├── seed.example.yaml               # Single source of truth config template
+└── .github/workflows/test.yml      # CI: shellcheck, terraform validate
 ```
 
 ## Disaster Recovery
@@ -127,24 +124,24 @@ botlab/
 | Borg (Storage Box) | Hourly | 12 months | Append-only (ransomware-resistant) |
 | S3 (Object Lock) | Weekly | 90 days | WORM / immutable |
 
+Restore is performed by an operator using `scripts/restore-gitlab.sh`. A weekly cron drives a fully automated restore-test on an ephemeral CX21 VM and emits a Prometheus metric — Alertmanager fires if the test fails or doesn't run.
+
 See `docs/DESIGN.md` Section 6 and `docs/SECURITY-ASSESSMENT.md` for details.
 
 ## Monitoring
 
-The Admin Bot provides:
+Prometheus, Alertmanager, and Grafana run as systemd services on the GitLab server.
 
-- **Health Checks**: GitLab endpoints every 30 seconds
-- **Resource Monitoring**: Disk, CPU, memory
-- **Backup Verification**: Weekly automated restore test
-- **Alerting**: Email notifications for critical issues
+- **Health checks**: blackbox_exporter probes `/-/health`
+- **Resource monitoring**: node_exporter (disk, CPU, memory)
+- **Backup signals**: cron jobs write to the textfile collector (backup age, `borg check` result, restore-test result)
+- **Alerting**: email + webhook via Alertmanager
 
-Access Grafana dashboards at `http://admin-bot:3000` (internal network).
+Grafana dashboards: `http://gitlab-server:3000` (internal network).
 
-## Per-Project Bot Configuration (Planned)
+## Design History
 
-> **Status**: Planned — not yet implemented. The policy file format is defined but the bot does not yet scan or enforce `.gitlab-bot.yml` files.
-
-See `docs/DESIGN.md` Section 7.8 and `docs/INTEGRATOR-BOT-PLAN.md` Section 7 for the specification.
+Earlier drafts (v1.x) proposed an "Admin Bot" (Python service) and a planned LLM-driven "Integrator Bot" to perform administrator duties. Both were dropped in v2.0 of the design — administration is now a human responsibility, supported by deterministic monitoring and cron-scheduled scripts. See the v2.0 row of the document control table in `docs/DESIGN.md`.
 
 ## Documentation
 
@@ -152,27 +149,25 @@ See `docs/DESIGN.md` Section 7.8 and `docs/INTEGRATOR-BOT-PLAN.md` Section 7 for
 |----------|-------------|
 | [DESIGN.md](docs/DESIGN.md) | Complete technical specification (master document) |
 | [SECURITY-ASSESSMENT.md](docs/SECURITY-ASSESSMENT.md) | Security & ransomware protection analysis |
-| [INTEGRATOR-BOT-PLAN.md](docs/INTEGRATOR-BOT-PLAN.md) | Claude Code CLI-based Integrator Bot architecture |
 | [CLAUDE.md](CLAUDE.md) | AI assistant instructions |
 
 ## Cost Breakdown
 
-Server types are configurable in `terraform/terraform.tfvars`. Default sizing:
+Server type is configurable in `terraform/terraform.tfvars`. Default sizing:
 
 | Resource | Specification | EUR/month |
 |----------|---------------|-----------|
 | GitLab Server | CPX31 (4 vCPU, 16GB RAM)* | ~18 |
-| Admin Bot | CX32 (4 vCPU, 8GB RAM)* | ~7 |
 | Block Storage | 300 GB* | ~13 |
 | Object Storage | ~2 TB | ~10 |
 | Storage Box | BX21 (5 TB) | ~16 |
 | Load Balancer | LB11 | ~6 |
-| **Total** | | **~70** |
+| **Total** | | **~63** |
 
 *Configurable via Terraform variables. See `terraform/variables.tf` for options.
 
 ## License
 
-Infrastructure code and admin bot are proprietary to ACME Corp.
+Infrastructure code is proprietary to ACME Corp.
 
-GitLab CE, Terraform, and other tools retain their original open source licenses.
+GitLab CE, Terraform, Prometheus/Grafana/Alertmanager, BorgBackup, and other tools retain their original open source licenses.

@@ -1,6 +1,6 @@
 # GitLab Infrastructure Project - TODO List
 
-**Last Updated**: 2026-02-02
+**Last Updated**: 2026-05-12
 
 ---
 
@@ -8,56 +8,28 @@
 
 ### Completed Tasks
 
-- [x] **RecoveryManager implementation** - Full disaster recovery automation
-  - `_provision_recovery_server()` - Creates new VM on Hetzner Cloud
-  - `_attach_volumes()` - Attaches existing volumes to recovery server
-  - `_install_gitlab()` - Installs GitLab CE via SSH
-  - `_restore_config()` - Restores configuration from Borg backup
-  - `_restore_backup()` - Full backup restoration
-  - `_reconfigure_gitlab()` - Post-restore reconfiguration
-  - `_verify_recovery()` - Health checks and validation
+- [x] **Backup scripts**
+  - `scripts/setup-borg-backup.sh` - BorgBackup initialization
+  - `scripts/setup-borg-append-only.sh` - Append-only hardening
+  - `scripts/backup-to-s3.sh` - S3 immutable copy (Object Lock)
+  - `scripts/restore-gitlab.sh` - Operator-driven restore with verification
+  - `scripts/verify-backup.sh` - Backup health check (JSON output)
 
-- [x] **RestoreTester implementation** - Automated backup restore testing
-  - `_provision_test_server()` - Creates ephemeral test VM
-  - `_install_gitlab()` - Installs GitLab on test server
-  - `_restore_backup()` - Restores backup for verification
-  - `_verify_restore()` - Comprehensive verification checks
+- [x] **Terraform infrastructure**
+  - Hetzner network, subnet, firewalls
+  - GitLab primary CPX31 with attached data + backup volumes
+  - Load balancer with TLS termination
+  - Cloud-init for GitLab server bootstrap (fail2ban, cron, Borg)
 
-- [x] **Test suite created**
-  - `tests/conftest.py` - Shared fixtures and mocks
-  - `tests/test_monitors.py` - Health, Resource, Backup monitor tests
-  - `tests/test_alerting.py` - AlertManager tests
-  - `tests/test_ai_analyst.py` - AI analyst tests
-  - `tests/test_recovery.py` - Recovery and RestoreTester tests
-  - `tests/test_main.py` - FastAPI endpoints and AdminBot lifecycle tests
-  - `tests/test_scheduler.py` - Scheduler wrapper tests
-  - `tests/test_maintenance.py` - Maintenance task tests
-  - `tests/test_ssh.py` - SSH client tests
-  - `tests/test_gitlab_api.py` - GitLab API client tests
+- [x] **Seed configuration**
+  - `seed.example.yaml` - Single source of truth template
+  - `scripts/seed_schema.py` - Pydantic validation
+  - `scripts/seed_bootstrap.py` - Generates `terraform.tfvars`, Borg conf, S3 conf
 
-- [x] **Restore scripts enhanced**
-  - `scripts/restore-gitlab.sh` - Full error handling, verification, rollback support
-  - `scripts/verify-backup.sh` - JSON output, cross-platform support
-
-- [x] **CI/CD pipeline created**
-  - `.github/workflows/test.yml` - pytest, ruff, mypy, shellcheck, terraform validate
-
-- [x] **SSH wrapper expanded**
-  - `terraform/templates/gitlab-cloud-init.yaml` - Expanded ALLOWED_COMMANDS from ~12 to ~40+ commands
-  - Supports all monitor requirements (nproc, stat, borg commands, gitlab-psql, etc.)
-
-- [x] **Documentation updated**
-  - `terraform/terraform.tfvars.example` - Comprehensive configuration template with documentation
-  - `docs/DESIGN.md` - Updated Section 7.3 (project structure), Section 8.5 (SSH wrapper)
-  - `CLAUDE.md` - Added documentation maintenance guidelines
-  - `README.md` - Updated project structure with tests, CI/CD
-  - `scripts/setup-borg-backup.sh` - Creates backup script if not present from cloud-init
-
-- [x] **Developer experience improvements**
-  - `.env.example` - Environment variables template for Admin Bot deployment
-  - `Makefile` - Common commands (test, lint, docker, terraform)
-  - `.pre-commit-config.yaml` - Automated code quality checks
-  - `main.py` - Wired up MaintenanceRunner, added API endpoints (/backup, /scheduler/jobs, /maintenance/{task})
+- [x] **Documentation v2.0**
+  - Removed Admin Bot and (planned) Integrator Bot from the architecture
+  - Documented Prometheus + Alertmanager + cron model as the replacement
+  - `docs/DESIGN.md` and `docs/SECURITY-ASSESSMENT.md` updated to v2.0
 
 ---
 
@@ -86,17 +58,18 @@
   - [ ] Test backup creation
   - [ ] Test backup restoration
 
-- [ ] **Admin Bot Deployment**
-  - [ ] Configure admin bot `.env`
-  - [ ] Deploy with `docker-compose`
-  - [ ] Verify monitoring active
-  - [ ] Test alerting
-  - [ ] Test AI analysis
+- [ ] **Monitoring & Alerting Setup**
+  - [ ] Install Prometheus, Alertmanager, Grafana on the GitLab server (systemd)
+  - [ ] Install node_exporter, blackbox_exporter, gitlab-exporter
+  - [ ] Author alert rules (`monitoring/alerts.yml`): `GitLabDown`, `DiskSpaceLow`, `BackupOverdue`, `BorgIntegrityFail`, `RestoreTestFail`, `SSLExpiringSoon`
+  - [ ] Configure Alertmanager email + webhook routes
+  - [ ] Wire textfile collector for cron-emitted metrics
+  - [ ] Wire weekly restore-test cron (`scripts/`) to ephemeral CX21 VM and emit metric
 
 - [ ] **End-to-End DR Test**
   - [ ] Trigger full backup
   - [ ] Simulate server failure
-  - [ ] Execute recovery procedure
+  - [ ] Execute recovery procedure (`scripts/restore-gitlab.sh`)
   - [ ] Verify GitLab functional
   - [ ] Document results
 
@@ -106,92 +79,54 @@
 - [x] Set up secondary backup destination — S3 immutable backup script
 - [x] Implement append-only Borg backup — `scripts/setup-borg-append-only.sh`
 - [x] Extend backup retention to 12 months — updated defaults
-- [x] Add backup integrity verification — `BackupMonitor.verify_integrity()`
 - [x] Add S3 backup to seed configuration — `backup.s3` in `seed_schema.py`
-- [ ] Create offline backup recovery kit
-- [ ] Configure fail2ban on all servers
+- [ ] Wire `borg check` into a weekly cron + Prometheus textfile metric
+- [ ] Move S3 immutable copy to a non-Hetzner provider (Wasabi/B2/AWS) to decouple from Hetzner account lockout risk
+- [ ] Create offline backup recovery kit (Borg admin key, Terraform state snapshot, gitlab-secrets.json)
+- [ ] Configure fail2ban on the GitLab server (currently set up in cloud-init — verify in prod)
+- [ ] Adopt sops/age (or systemd-creds) for secrets on disk, replacing plaintext in `/etc/gitlab/gitlab.rb` and `/etc/gitlab-backup.conf`
+- [ ] Pin GitLab CE version and document the upgrade runbook
 - [ ] Security audit of configurations
 
 ### Phase 6: Future Enhancements (Priority: LOW)
 
-- [x] **Claude Code CLI Integration** (Phase 1)
-  - [x] `src/ai/claude_cli.py` - CLI wrapper for Claude Code invocation
-  - [x] Updated `src/ai/analyst.py` - Supports both SDK and CLI modes
-  - [x] Updated `src/config.py` - Added `use_cli`, `cli_path`, `cli_timeout` settings
-  - [x] Updated tests for both modes
-
-- [x] **MCP Server Scaffolds Created**
-  - [x] `mcp/gitlab-server/` - GitLab API operations (list_projects, get_merge_requests, trigger_pipeline)
-  - [x] `mcp/hetzner-server/` - Hetzner Cloud operations (list_servers, create_server, power_action)
-  - [x] `mcp/borg-server/` - BorgBackup operations (list_archives, check_repo, get_backup_info)
-
-- [ ] Implement per-project `.gitlab-bot.yml` scanning
-- [ ] Add Grafana dashboards
-- [ ] Add Slack/Teams integration
-- [ ] Complete MCP server testing and deployment
+- [ ] Author shareable Grafana dashboards (GitLab Overview, Infrastructure, Backup Status)
+- [ ] Add Slack/Teams Alertmanager receiver
+- [ ] AIDE or auditd on `/var/opt/gitlab` and `/etc/gitlab` for file integrity monitoring
+- [ ] Object Storage versioning + cross-bucket replication for LFS/artifacts
 
 ---
 
 ## Quick Commands
 
 ```bash
-# Run tests
-cd gitlab-admin-bot
-pip install -e ".[dev]"
-pytest tests/ -v
-
-# Run linting
-ruff check src/ tests/
-
-# Type checking
-mypy src/ --ignore-missing-imports
-
 # Terraform
 cd terraform
 terraform init
 terraform plan
 terraform apply
 
-# Docker deployment
-cd gitlab-admin-bot
-docker compose up -d
+# Validate seed config
+python scripts/seed_bootstrap.py seed.yaml --validate
+
+# Shellcheck
+make shellcheck
 ```
 
 ---
 
-## Files Modified in This Session
+## Recent Changes (v2.0, 2026-05-12)
 
-| File | Status | Changes |
-|------|--------|---------|
-| `gitlab-admin-bot/src/restore/recovery.py` | Updated | Full method implementations |
-| `gitlab-admin-bot/src/restore/tester.py` | Updated | Full method implementations |
-| `gitlab-admin-bot/tests/__init__.py` | Created | Test package init |
-| `gitlab-admin-bot/tests/conftest.py` | Created | Shared fixtures |
-| `gitlab-admin-bot/tests/test_monitors.py` | Created | Monitor tests |
-| `gitlab-admin-bot/tests/test_alerting.py` | Created | Alerting tests |
-| `gitlab-admin-bot/tests/test_ai_analyst.py` | Created | AI analyst tests |
-| `gitlab-admin-bot/tests/test_recovery.py` | Created | Recovery tests |
-| `scripts/restore-gitlab.sh` | Updated | Error handling, rollback |
-| `scripts/verify-backup.sh` | Updated | JSON output, cross-platform |
-| `scripts/setup-borg-backup.sh` | Updated | Creates backup script if not exists |
-| `.github/workflows/test.yml` | Created | CI/CD pipeline |
-| `terraform/terraform.tfvars.example` | Updated | Comprehensive configuration template |
-| `terraform/templates/gitlab-cloud-init.yaml` | Updated | Expanded SSH wrapper commands |
-| `docs/DESIGN.md` | Updated | Section 7.3 project structure, Section 8.5 SSH security |
-| `CLAUDE.md` | Updated | Project structure, documentation maintenance guidelines |
-| `README.md` | Updated | Project structure with tests, CI/CD |
-| `TODO.md` | Created | Implementation status tracking |
-| `gitlab-admin-bot/.env.example` | Created | Environment variables template |
-| `gitlab-admin-bot/src/main.py` | Updated | MaintenanceRunner, new API endpoints |
-| `Makefile` | Created | Development commands |
-| `.pre-commit-config.yaml` | Created | Pre-commit hooks |
-| `gitlab-admin-bot/src/ai/claude_cli.py` | Created | Claude Code CLI wrapper |
-| `gitlab-admin-bot/src/ai/analyst.py` | Updated | SDK/CLI dual mode support |
-| `gitlab-admin-bot/src/ai/__init__.py` | Updated | Export new classes |
-| `gitlab-admin-bot/src/config.py` | Updated | CLI mode configuration |
-| `gitlab-admin-bot/tests/test_ai_analyst.py` | Updated | CLI mode tests |
-| `gitlab-admin-bot/tests/conftest.py` | Updated | CLI settings fixture |
-| `gitlab-admin-bot/pyproject.toml` | Updated | Added mcp dependency |
-| `gitlab-admin-bot/mcp/gitlab-server/server.py` | Created | GitLab MCP server |
-| `gitlab-admin-bot/mcp/hetzner-server/server.py` | Created | Hetzner MCP server |
-| `gitlab-admin-bot/mcp/borg-server/server.py` | Created | Borg MCP server |
+| Area | Change |
+|------|--------|
+| `docs/DESIGN.md` | Bumped to v2.0. Removed Section 7 (AI Bot Admin System) and Section 7.8 (per-repo bot policies). Replaced with a Monitoring & Alerting section describing Prometheus + Alertmanager + cron on the GitLab server. Removed the admin-bot CX32 instance from the cost summary and infrastructure section. Updated total cost to ~63 EUR/month. |
+| `docs/SECURITY-ASSESSMENT.md` | Bumped to v2.0. Removed "Admin Bot" attack-vector entries, updated backup architecture diagram to reflect cron-from-GitLab-server flow, replaced bot-driven detection language with deterministic Prometheus/Alertmanager signals. |
+| `docs/INTEGRATOR-BOT-PLAN.md` | Deleted. |
+| `README.md` | Rewrote to reflect cron + Alertmanager model. Cost updated to ~63 EUR/month. |
+| `CLAUDE.md` | Updated guidance to forbid LLM-driven automation and document the new architecture. |
+| `terraform/` | Removed admin-bot server, its firewall, its outputs, its private IP variable, and the admin-bot cloud-init template. Simplified `gitlab-cloud-init.yaml` to remove the bot SSH wrapper and `gitlab-admin` user. |
+| `scripts/seed_bootstrap.py` | Dropped `bot-env` and `bot-config` targets. Remaining targets: `terraform`, `borg-conf`, `s3-conf`. |
+| `scripts/seed_schema.py` | Removed `ClaudeConfig`, `BotConfig`, `MonitoringConfig`, and `ServersConfig.admin_bot`. |
+| `seed.example.yaml` | Dropped `claude`, `bot`, `monitoring` sections and the admin-bot server entry. |
+| `Makefile`, `.github/workflows/test.yml`, `.pre-commit-config.yaml` | Removed Python/pytest/mypy/ruff/docker targets. Kept shellcheck and terraform validation. |
+| `gitlab-admin-bot/` | Tree deleted. |

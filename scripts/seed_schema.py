@@ -44,7 +44,6 @@ class ServerSpec(BaseModel):
 
 class ServersConfig(BaseModel):
     gitlab: ServerSpec
-    admin_bot: ServerSpec
 
 
 class NetworkConfig(BaseModel):
@@ -130,36 +129,6 @@ class AlertingConfig(BaseModel):
     cooldown_minutes: int = 60
 
 
-class ClaudeConfig(BaseModel):
-    enabled: bool = True
-    api_key: str = ""
-    model: str = "claude-sonnet-4-20250514"
-    max_tokens: int = 4096
-    analysis_interval_minutes: int = 30
-    use_cli: bool = False
-    cli_path: str = "claude"
-    cli_timeout: int = 120
-
-
-class BotConfig(BaseModel):
-    debug: bool = False
-    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
-    api_host: str = "0.0.0.0"
-    api_port: int = 8080
-
-
-class MonitoringConfig(BaseModel):
-    disk_warning_percent: int = 80
-    disk_critical_percent: int = 90
-    memory_warning_percent: int = 80
-    memory_critical_percent: int = 95
-    cpu_warning_percent: int = 70
-    cpu_critical_percent: int = 90
-    health_check_interval_seconds: int = 30
-    resource_check_interval_seconds: int = 60
-    backup_check_interval_minutes: int = 15
-
-
 # ---------------------------------------------------------------------------
 # Root model
 # ---------------------------------------------------------------------------
@@ -174,19 +143,12 @@ class SeedConfig(BaseModel):
     gitlab: GitLabConfig
     backup: BackupConfig
     alerting: AlertingConfig = Field(default_factory=AlertingConfig)
-    claude: ClaudeConfig = Field(default_factory=ClaudeConfig)
-    bot: BotConfig = Field(default_factory=BotConfig)
-    monitoring: MonitoringConfig = Field(default_factory=MonitoringConfig)
 
     # -- Derived values (computed, not stored) -----------------------------
 
     @property
     def gitlab_url(self) -> str:
         return f"https://{self.gitlab.domain}"
-
-    @property
-    def gitlab_ssh_host(self) -> str:
-        return self.infrastructure.servers.gitlab.private_ip
 
     @property
     def borg_repo(self) -> str:

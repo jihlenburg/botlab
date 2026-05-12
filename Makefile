@@ -4,11 +4,12 @@
 # Usage: make <target>
 # Run 'make help' to see all available targets
 
-.PHONY: help install test lint format type-check pre-commit \
-        docker-build docker-up docker-down docker-logs docker-shell \
-        tf-init tf-plan tf-apply tf-destroy \
+.PHONY: help \
+        tf-init tf-plan tf-apply tf-destroy tf-fmt tf-validate tf-output \
         seed-validate seed-generate seed-diff \
-        clean all
+        shellcheck \
+        pre-commit pre-commit-install \
+        clean ci
 
 # Default target
 .DEFAULT_GOAL := help
@@ -28,59 +29,6 @@ help: ## Show this help message
 	@echo ""
 	@echo "$(GREEN)Available targets:$(RESET)"
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z_-]+:.*##/ { printf "  $(CYAN)%-20s$(RESET) %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
-
-# =============================================================================
-# Python Development (Admin Bot)
-# =============================================================================
-
-install: ## Install Python dependencies (dev mode)
-	cd gitlab-admin-bot && pip install -e ".[dev]"
-
-test: ## Run pytest test suite
-	cd gitlab-admin-bot && pytest tests/ -v
-
-test-cov: ## Run tests with coverage report
-	cd gitlab-admin-bot && pytest tests/ -v --cov=src --cov-report=term-missing --cov-report=html
-
-lint: ## Run ruff linter
-	cd gitlab-admin-bot && ruff check src/ tests/
-
-format: ## Format code with ruff
-	cd gitlab-admin-bot && ruff format src/ tests/
-	cd gitlab-admin-bot && ruff check --fix src/ tests/
-
-type-check: ## Run mypy type checking
-	cd gitlab-admin-bot && mypy src/ --ignore-missing-imports
-
-pre-commit: ## Run all pre-commit hooks
-	pre-commit run --all-files
-
-pre-commit-install: ## Install pre-commit hooks
-	pip install pre-commit
-	pre-commit install
-
-check: lint type-check test ## Run all checks (lint, type-check, test)
-
-# =============================================================================
-# Docker (Admin Bot)
-# =============================================================================
-
-docker-build: ## Build Docker image
-	cd gitlab-admin-bot && docker compose build
-
-docker-up: ## Start containers in background
-	cd gitlab-admin-bot && docker compose up -d
-
-docker-down: ## Stop and remove containers
-	cd gitlab-admin-bot && docker compose down
-
-docker-logs: ## View container logs (follow mode)
-	cd gitlab-admin-bot && docker compose logs -f
-
-docker-shell: ## Open shell in running container
-	cd gitlab-admin-bot && docker compose exec admin-bot /bin/bash
-
-docker-restart: docker-down docker-up ## Restart containers
 
 # =============================================================================
 # Terraform (Infrastructure)
@@ -128,23 +76,29 @@ shellcheck: ## Run shellcheck on all scripts (requires shellcheck installed)
 	@if command -v shellcheck >/dev/null 2>&1; then shellcheck scripts/*.sh; else echo "shellcheck not installed, skipping"; fi
 
 # =============================================================================
+# Pre-commit
+# =============================================================================
+
+pre-commit: ## Run all pre-commit hooks
+	pre-commit run --all-files
+
+pre-commit-install: ## Install pre-commit hooks
+	pip install pre-commit
+	pre-commit install
+
+# =============================================================================
 # Cleanup
 # =============================================================================
 
-clean: ## Clean up generated files
+clean: ## Clean up generated caches
 	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 	find . -type d -name ".pytest_cache" -exec rm -rf {} + 2>/dev/null || true
 	find . -type d -name ".mypy_cache" -exec rm -rf {} + 2>/dev/null || true
 	find . -type d -name ".ruff_cache" -exec rm -rf {} + 2>/dev/null || true
-	find . -type d -name "*.egg-info" -exec rm -rf {} + 2>/dev/null || true
 	find . -type f -name "*.pyc" -delete 2>/dev/null || true
-	rm -rf gitlab-admin-bot/htmlcov 2>/dev/null || true
-	rm -rf gitlab-admin-bot/coverage.xml 2>/dev/null || true
 
 # =============================================================================
 # All-in-one targets
 # =============================================================================
 
-all: install check ## Install and run all checks
-
-ci: lint type-check test shellcheck ## Run CI pipeline locally (Python checks)
+ci: shellcheck tf-fmt tf-validate ## Run CI pipeline locally

@@ -219,10 +219,6 @@ config.local.yml
 *.zip
 !scripts/*.example.tar.gz
 
-# Admin bot data directory (runtime data)
-gitlab-admin-bot/data/
-gitlab-admin-bot/logs/
-
 # Test artifacts
 test-output/
 .test-data/

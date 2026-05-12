@@ -1,7 +1,7 @@
 # ACME Corp GitLab Infrastructure - Master Design Document
 
-**Version**: 1.3
-**Last Updated**: 2026-02-02
+**Version**: 2.0
+**Last Updated**: 2026-05-12
 **Status**: Draft - Pending Approval
 
 ---
@@ -11,7 +11,6 @@
 | Document | Purpose |
 |----------|---------|
 | [SECURITY-ASSESSMENT.md](SECURITY-ASSESSMENT.md) | Cybersecurity analysis, ransomware protection, DR edge cases |
-| [INTEGRATOR-BOT-PLAN.md](INTEGRATOR-BOT-PLAN.md) | Claude Code CLI-based Integrator Bot architecture |
 
 ---
 
@@ -23,14 +22,12 @@
 4. [Infrastructure Design](#4-infrastructure-design)
 5. [GitLab Configuration](#5-gitlab-configuration)
 6. [Disaster Recovery Design](#6-disaster-recovery-design)
-7. [AI Bot Admin System](#7-ai-bot-admin-system)
-   - 7.8 [Multi-Repository Policy System](#78-multi-repository-policy-system)
+7. [Monitoring & Alerting](#7-monitoring--alerting)
 8. [Security Architecture](#8-security-architecture)
-9. [Ransomware Protection](#9-ransomware-protection) *(NEW)*
-10. [Monitoring & Alerting](#10-monitoring--alerting)
-11. [Implementation Plan](#11-implementation-plan)
-12. [Verification & Testing](#12-verification--testing)
-13. [Operational Procedures](#13-operational-procedures)
+9. [Ransomware Protection](#9-ransomware-protection)
+10. [Implementation Plan](#10-implementation-plan)
+11. [Verification & Testing](#11-verification--testing)
+12. [Operational Procedures](#12-operational-procedures)
 
 ---
 
@@ -46,7 +43,8 @@ This document defines the complete technical architecture for ACME Corp' GitLab 
 - Git LFS support for electronics design files
 - SSO integration with Microsoft Azure AD
 - Backup-based disaster recovery
-- AI-powered admin bot for automated monitoring and maintenance
+- Monitoring and alerting via Prometheus, Grafana, and Alertmanager
+- Cron-driven hourly backups with weekly automated restore tests
 
 ### 1.3 Constraints
 
@@ -65,12 +63,11 @@ This document defines the complete technical architecture for ACME Corp' GitLab 
 | Hosting | Hetzner Cloud | Cost-effective, EU data residency |
 | DR Strategy | Backup-based cold recovery | Simple, robust, cost-effective |
 | Server Size | CPX31 (4 vCPU, 16GB) | Right-sized for 10-20 developers |
-| Admin Automation | Claude Code CLI + MCP | AI-powered, extensible, future-proof |
+| Automation Model | Cron + Prometheus/Alertmanager | Deterministic, auditable, low operational risk |
 | Backup Strategy | 3-2-1 with immutable tier | Ransomware-resistant (see Section 9) |
 | Backup Destinations | Borg (append-only) + S3 (Object Lock) | Defense in depth |
-| Project Configuration | Per-repo `.gitlab-bot.yml` | Distributed policy, auditable, scalable |
 
-**Evolution Note**: The Admin Bot architecture evolves from Python-based to Claude Code CLI-based "Integrator Bot" for improved extensibility and AI capabilities. See [INTEGRATOR-BOT-PLAN.md](INTEGRATOR-BOT-PLAN.md).
+**Design note**: Earlier drafts proposed an "Admin Bot" / LLM-driven "Integrator Bot" to perform administrator duties. That ambition was removed in v2.0 — see the v2.0 row of the document control table. Administration is now performed by humans, supported by deterministic monitoring (Prometheus + Alertmanager) and scheduled scripts (cron).
 
 ---
 
@@ -146,27 +143,30 @@ This document defines the complete technical architecture for ACME Corp' GitLab 
 │  ┌─────────────────────────────────────────────────────────────────────────┐ │
 │  │                    PRIVATE NETWORK (10.0.0.0/16)                         │ │
 │  │                                                                          │ │
-│  │         ┌─────────────┐                    ┌─────────────┐              │ │
-│  │         │   GITLAB    │                    │  ADMIN BOT  │              │ │
-│  │         │   PRIMARY   │◄───── monitors ────│   MACHINE   │              │ │
-│  │         │   (CPX31)   │                    │   (CX32)    │              │ │
-│  │         │             │                    │             │              │ │
-│  │         │ Falkenstein │                    │ Falkenstein │              │ │
-│  │         └──────┬──────┘                    └──────┬──────┘              │ │
-│  │                │                                  │                      │ │
-│  │                └──────────────┬───────────────────┘                      │ │
-│  │                               │                                          │ │
-│  └───────────────────────────────┼──────────────────────────────────────────┘ │
-│                                  │                                            │
-│  ┌───────────────────────────────┼───────────────────────────────────────┐   │
-│  │                               │                                       │   │
-│  │  ┌──────────────┐     ┌───────┴───────┐     ┌──────────────┐        │   │
-│  │  │   OBJECT     │     │  STORAGE BOX  │     │   VOLUMES    │        │   │
-│  │  │   STORAGE    │     │   (BACKUPS)   │     │  (300 GB)    │        │   │
-│  │  │   (S3)       │     │    BX21       │     │              │        │   │
-│  │  └──────────────┘     └───────────────┘     └──────────────┘        │   │
-│  │                         STORAGE LAYER                                │   │
-│  └──────────────────────────────────────────────────────────────────────┘   │
+│  │                         ┌─────────────────┐                              │ │
+│  │                         │   GITLAB        │                              │ │
+│  │                         │   PRIMARY       │                              │ │
+│  │                         │   (CPX31)       │                              │ │
+│  │                         │                 │                              │ │
+│  │                         │   Falkenstein   │                              │ │
+│  │                         │                 │                              │ │
+│  │                         │  + Prometheus   │                              │ │
+│  │                         │  + Grafana      │                              │ │
+│  │                         │  + Alertmanager │                              │ │
+│  │                         │  + cron backups │                              │ │
+│  │                         └────────┬────────┘                              │ │
+│  │                                  │                                       │ │
+│  └──────────────────────────────────┼───────────────────────────────────────┘ │
+│                                     │                                         │
+│  ┌──────────────────────────────────┼──────────────────────────────────┐    │
+│  │                                  │                                  │    │
+│  │  ┌──────────────┐     ┌──────────▼────┐     ┌──────────────┐      │    │
+│  │  │   OBJECT     │     │  STORAGE BOX  │     │   VOLUMES    │      │    │
+│  │  │   STORAGE    │     │   (BACKUPS)   │     │  (300 GB)    │      │    │
+│  │  │   (S3)       │     │    BX21       │     │              │      │    │
+│  │  └──────────────┘     └───────────────┘     └──────────────┘      │    │
+│  │                         STORAGE LAYER                              │    │
+│  └────────────────────────────────────────────────────────────────────┘    │
 │                                                                              │
 │  ┌──────────────────┐                                                        │
 │  │  LOAD BALANCER   │◄──── Public IP / DNS                                  │
@@ -180,13 +180,14 @@ This document defines the complete technical architecture for ACME Corp' GitLab 
 
 | Component | Purpose | Location |
 |-----------|---------|----------|
-| GitLab Primary | Main GitLab instance | Falkenstein |
-| Admin Bot | Monitoring, maintenance, alerting | Falkenstein |
+| GitLab Primary | Main GitLab instance; also hosts Prometheus/Grafana/Alertmanager and cron-driven backup scripts | Falkenstein |
 | Object Storage | LFS, artifacts, uploads | Falkenstein |
 | Storage Box | Encrypted backups (offsite) | Falkenstein (different DC) |
 | Load Balancer | TLS termination, health checks | Falkenstein |
 
-**Note**: No hot standby secondary. Recovery via backup restoration to new server.
+**Notes**:
+- No hot standby secondary. Recovery via backup restoration to new server.
+- No long-lived automation host: cron jobs and the monitoring stack are co-located on the GitLab server. Administration is performed by humans, augmented by alerts.
 
 ---
 
@@ -213,22 +214,6 @@ This document defines the complete technical architecture for ACME Corp' GitLab 
 - Medium team (10-20): `cpx31` (4 vCPU, 16GB) ~18 EUR/month (default)
 - Large team (20-50): `cpx41` (8 vCPU, 32GB) ~35 EUR/month
 
-#### 4.1.2 Admin Bot Machine (Configurable)
-
-| Attribute | Default Value | Terraform Variable |
-|-----------|---------------|-------------------|
-| **Type** | CX32 (Shared vCPU) | `admin_bot_server_type` |
-| **vCPUs** | 4 shared | - |
-| **RAM** | 8 GB | - |
-| **Local Storage** | 80 GB NVMe | - |
-| **Location** | Falkenstein (fsn1) | `location` |
-| **OS** | Ubuntu 24.04 LTS | `server_image` |
-| **Cost** | ~7 EUR/month | - |
-
-**Rationale**: Monitoring workload is lightweight. Co-located with primary for low-latency health checks.
-
-**Note**: For minimal setups, `cx22` (2 vCPU, 4GB) at ~4 EUR/month is sufficient.
-
 ### 4.2 Network Architecture
 
 #### 4.2.1 IP Addressing
@@ -237,8 +222,7 @@ This document defines the complete technical architecture for ACME Corp' GitLab 
 Private Network: 10.0.0.0/16
 
 Subnet: 10.0.1.0/24 (Production)
-├── 10.0.1.10  GitLab Primary
-└── 10.0.1.30  Admin Bot
+└── 10.0.1.10  GitLab Primary
 
 Subnet: 10.0.2.0/24 (Future CI Runners)
 └── Reserved for scaling
@@ -251,24 +235,14 @@ Subnet: 10.0.2.0/24 (Future CI Runners)
 | Direction | Protocol | Port | Source | Purpose |
 |-----------|----------|------|--------|---------|
 | Inbound | TCP | 443 | 0.0.0.0/0 | HTTPS |
-| Inbound | TCP | 22 | 0.0.0.0/0 | SSH (Git) |
+| Inbound | TCP | 22 | Trusted admin IPs (CIDR) | SSH (admin + Git) |
 | Inbound | TCP | 80 | 0.0.0.0/0 | HTTP→HTTPS redirect |
 
 **Internal Firewall (gitlab-internal-fw)**
 
 | Direction | Protocol | Port | Source | Purpose |
 |-----------|----------|------|--------|---------|
-| Inbound | TCP | 9090 | 10.0.1.30 | Prometheus metrics |
-| Inbound | TCP | 22 | 10.0.1.30 | Admin SSH |
-| Inbound | ALL | ALL | 10.0.1.0/24 | Internal services |
-
-**Admin Bot Firewall (admin-fw)**
-
-| Direction | Protocol | Port | Source | Purpose |
-|-----------|----------|------|--------|---------|
-| Inbound | TCP | 22 | Trusted IPs | SSH access |
-| Outbound | TCP | 443 | 0.0.0.0/0 | APIs, alerts |
-| Outbound | TCP | 22 | 10.0.1.0/24 | GitLab SSH |
+| Inbound | ALL | ALL | 10.0.1.0/24 | Internal services / LB health checks |
 
 ### 4.3 Storage Architecture
 
@@ -332,12 +306,13 @@ Subnet: 10.0.2.0/24 (Future CI Runners)
 | Resource | Specification | EUR/month |
 |----------|---------------|-----------|
 | GitLab Primary | CPX31 (4 vCPU, 16GB) | ~18 |
-| Admin Bot | CX32 (4 vCPU, 8GB) | ~7 |
 | Block Storage | 300 GB | ~13 |
 | Object Storage | ~2 TB | ~10 |
 | Storage Box | BX21 (5 TB) | ~16 |
 | Load Balancer | LB11 | ~6 |
-| **Total** | | **~70** |
+| **Total** | | **~63** |
+
+The previous design also provisioned a dedicated admin-bot server (CX32, ~7 EUR/month). That server was removed in v2.0 along with the bot itself.
 
 ---
 
@@ -693,7 +668,7 @@ apt-get install gitlab-ce
 
 **Step 3: Restore configuration**
 ```bash
-# On admin bot or recovery workstation
+# On a recovery workstation (offline-keyed Borg access)
 export BORG_REPO="ssh://uXXXXX@uXXXXX.your-storagebox.de:23/./gitlab-borg"
 borg extract "${BORG_REPO}::latest" etc/gitlab
 
@@ -728,289 +703,99 @@ gitlab-rake gitlab:check SANITIZE=true
 # Or update Load Balancer backend
 ```
 
-#### 6.4.3 Automated Recovery Script
+#### 6.4.3 Recovery Tooling
 
-The Admin Bot includes a semi-automated recovery script that:
-1. Provisions new server via Hetzner API
-2. Installs GitLab
-3. Restores from latest backup
-4. Runs verification checks
-5. Prompts operator to update DNS
+Recovery is an operator-driven procedure, supported by:
+- `scripts/restore-gitlab.sh` — full restore from Borg with verification and rollback support
+- `scripts/verify-backup.sh` — JSON-output backup health check
+- `terraform apply` to provision the replacement server
 
-See `gitlab-admin-bot/src/restore/recovery.py`
+There is no autonomous recovery agent. A human runs the script with a fresh server's address and a backup identifier.
 
-### 6.5 Backup Verification
+### 6.5 Backup Verification (Weekly Automated)
 
-**Weekly automated test:**
-1. Provision ephemeral CX21 server
-2. Install GitLab CE
-3. Restore latest backup
+Weekly restore test driven by cron on the GitLab server (or run manually from an operator workstation):
+
+1. Provision ephemeral CX21 server via Terraform / `hcloud` CLI
+2. Install GitLab CE (same version as production)
+3. Restore latest backup from Borg
 4. Verify:
-   - Web UI accessible
-   - Admin login works
+   - Web UI accessible (HTTP 200 on `/-/health`)
    - Sample repo cloneable
-5. Generate report
-6. Destroy test server
+   - Database integrity (`gitlab-rake gitlab:check`)
+5. Emit Prometheus metric `gitlab_restore_test_success{...}` via the textfile collector
+6. Destroy ephemeral VM
+7. Alertmanager fires if the metric is missing or `0` for the current week
+
+Alerting on the metric gives the same "did the restore test pass?" signal previously produced by the bot, without long-lived automation credentials.
 
 ---
 
-## 7. AI Bot Admin System
+## 7. Monitoring & Alerting
 
-### 7.1 Purpose
-
-Automated monitoring, maintenance, backup management, and recovery assistance for the GitLab infrastructure.
-
-### 7.2 Architecture
+### 7.1 Metrics Stack
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                      ADMIN BOT MACHINE (CX32)                   │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │                    ADMIN BOT SERVICE                     │   │
-│  │                                                          │   │
-│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌─────────┐ │   │
-│  │  │ Scheduler│  │ Monitors │  │  Maint.  │  │ Alerter │ │   │
-│  │  │(APSched) │  │          │  │  Tasks   │  │         │ │   │
-│  │  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬────┘ │   │
-│  │       │             │             │             │       │   │
-│  │       └─────────────┴──────┬──────┴─────────────┘       │   │
-│  │                            │                             │   │
-│  │                     ┌──────▼──────┐                     │   │
-│  │                     │   Core API  │                     │   │
-│  │                     │  (FastAPI)  │                     │   │
-│  │                     └──────┬──────┘                     │   │
-│  │                            │                             │   │
-│  └────────────────────────────┼─────────────────────────────┘   │
-│                               │                                 │
-│  ┌────────────────────────────┼─────────────────────────────┐   │
-│  │                            │                             │   │
-│  │  ┌──────────┐  ┌───────────▼───────────┐  ┌──────────┐ │   │
-│  │  │  SQLite  │  │    GitLab API Client  │  │   SSH    │ │   │
-│  │  │  (State) │  │    (python-gitlab)    │  │  Client  │ │   │
-│  │  └──────────┘  └───────────────────────┘  └──────────┘ │   │
-│  │                                                         │   │
-│  │                     INTEGRATIONS                        │   │
-│  └─────────────────────────────────────────────────────────┘   │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-          │                    │                    │
-          ▼                    ▼                    ▼
-    ┌──────────┐         ┌──────────┐        ┌──────────┐
-    │  GitLab  │         │  Hetzner │        │ Alerting │
-    │  Server  │         │   API    │        │ Channels │
-    └──────────┘         └──────────┘        └──────────┘
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│   GitLab    │────►│ Prometheus  │────►│   Grafana   │
+│  Exporters  │     │   (TSDB)    │     │ (Dashboards)│
+└─────────────┘     └─────────────┘     └─────────────┘
+                           │
+                    ┌──────▼──────┐
+                    │ Alertmanager│
+                    └──────┬──────┘
+                           │
+              ┌────────────┼────────────┐
+              ▼            ▼            ▼
+         ┌────────┐  ┌──────────┐  ┌─────────┐
+         │ Email  │  │ Webhook  │  │   Log   │
+         └────────┘  └──────────┘  └─────────┘
 ```
 
-### 7.3 Project Structure
+Prometheus, Alertmanager, and Grafana run on the GitLab primary server (systemd units). The textfile collector exposes outputs of cron scripts (backup age, restore-test result, borg integrity check) as Prometheus metrics.
 
-```
-gitlab-admin-bot/
-├── pyproject.toml
-├── Dockerfile
-├── docker-compose.yml
-├── config/
-│   ├── config.yaml
-│   └── alerts.yaml
-├── src/
-│   ├── __init__.py
-│   ├── main.py                 # Entry point
-│   ├── config.py               # Configuration management
-│   ├── scheduler.py            # APScheduler setup
-│   ├── monitors/
-│   │   ├── __init__.py
-│   │   ├── base.py             # Base monitor class
-│   │   ├── health.py           # GitLab health endpoints
-│   │   ├── resources.py        # Disk, CPU, memory
-│   │   ├── backup.py           # Backup age and status
-│   │   └── services.py         # GitLab services status
-│   ├── maintenance/
-│   │   ├── __init__.py
-│   │   ├── backup.py           # Trigger backups
-│   │   ├── cleanup.py          # Artifact/LFS cleanup
-│   │   └── registry.py         # Container registry GC
-│   ├── alerting/
-│   │   ├── __init__.py
-│   │   ├── manager.py          # Alert routing, deduplication
-│   │   ├── email.py            # Email notifications
-│   │   └── webhook.py          # Slack/Mattermost webhooks
-│   ├── restore/
-│   │   ├── __init__.py
-│   │   ├── tester.py           # Automated restore testing
-│   │   ├── recovery.py         # DR recovery automation
-│   │   └── hetzner.py          # VM provisioning
-│   ├── ai/
-│   │   ├── __init__.py
-│   │   └── analyst.py          # Claude API integration
-│   └── utils/
-│       ├── __init__.py
-│       ├── gitlab_api.py       # python-gitlab wrapper
-│       ├── ssh.py              # SSH command execution
-│       └── metrics.py          # Prometheus metrics export
-├── tests/
-│   ├── __init__.py
-│   ├── conftest.py             # Shared fixtures and mocks
-│   ├── test_monitors.py        # Monitor unit tests
-│   ├── test_alerting.py        # Alert manager tests
-│   ├── test_ai_analyst.py      # AI analyst tests
-│   └── test_recovery.py        # Recovery automation tests
-└── scripts/
-    ├── install.sh
-    └── gitlab-admin-wrapper.sh
-```
+### 7.2 Monitoring Coverage
 
-### 7.4 Monitoring Capabilities
+| Signal | Source | Warning | Critical |
+|--------|--------|---------|----------|
+| GitLab health endpoint | blackbox_exporter on `/-/health` | — | down for 2m |
+| Disk usage (`/var/opt/gitlab`) | node_exporter | 80% | 90% |
+| Memory | node_exporter | 80% | 95% |
+| CPU (15m load) | node_exporter | 70% | 90% |
+| Backup age | cron + textfile collector | > 2h | > 4h |
+| Borg repo integrity | weekly cron + textfile | — | last check failed |
+| Weekly restore-test | weekly cron + textfile | — | last run failed or missing |
+| SSL certificate expiry | blackbox_exporter / cert script | 30 days | 7 days |
 
-| Monitor | Check | Warning | Critical | Interval |
-|---------|-------|---------|----------|----------|
-| Disk Space | df -h | 80% | 90% | 5 min |
-| CPU Usage | /proc/stat | 70% (15m) | 90% (5m) | 1 min |
-| Memory | /proc/meminfo | 80% | 95% | 1 min |
-| GitLab Health | /-/health | - | Fail | 30 sec |
-| GitLab Readiness | /-/readiness | - | Fail | 1 min |
-| Backup Age | File mtime | 2h | 4h | 15 min |
-| SSL Expiry | Certificate check | 30 days | 7 days | Daily |
+### 7.3 Scheduled Maintenance (cron)
 
-### 7.5 Automated Maintenance
+Hourly:
+- `gitlab-backup-to-borg.sh` — create GitLab backup, ship to Borg, prune local
 
-#### Hourly Tasks
-- Trigger GitLab backup
-- Check backup completion
-- Alert if backup fails
+Daily (03:00 UTC):
+- Log rotation, orphaned-artifact cleanup
+- Optional weekly S3 immutable backup (Sundays, see `scripts/backup-to-s3.sh`)
 
-#### Daily Tasks (03:00 UTC)
-- Sync backups to Storage Box (BorgBackup)
-- Rotate logs
-- Clean orphaned artifacts
-- Generate daily report
+Weekly (Sunday):
+- Container registry garbage collection (`gitlab-ctl registry-garbage-collect`)
+- `borg check --repository-only` (integrity)
+- Restore test on ephemeral VM (see 6.5)
 
-#### Weekly Tasks (Sunday 03:00 UTC)
-- Container registry garbage collection
-- Database vacuum analyze
-- Backup restore test (ephemeral VM)
-- Generate weekly report
+Monthly:
+- `unattended-upgrades` security patches review
+- Storage growth report (Grafana dashboard snapshot, emailed)
 
-#### Monthly Tasks (1st, 09:00 UTC)
-- Security updates check
-- SSL certificate expiry check
-- Storage growth analysis
+### 7.4 Alerting
 
-### 7.6 Backup Verification
+Alertmanager handles routing and deduplication. Operators receive:
 
-**Weekly automated restore test:**
-1. Provision ephemeral Hetzner VM (CX21, ~3 EUR for a few hours)
-2. Install GitLab CE (same version as production)
-3. Copy latest backup from Storage Box
-4. Execute restore
-5. Verify:
-   - Web UI accessible (HTTP 200 on /-/health)
-   - Admin login works (API authentication)
-   - Sample project cloneable (git clone test)
-   - Database integrity (gitlab:check rake task)
-6. Generate report (success/failure, duration, issues)
-7. Destroy ephemeral VM
-8. Email report to admins
+| Severity | Channel | Repeat |
+|----------|---------|--------|
+| Critical | Email + webhook | Every 1h until resolved |
+| Warning | Email | Every 12h until resolved |
+| Info | Email digest | Daily |
 
-### 7.7 Alerting Configuration
-
-**Severity Levels:**
-| Level | Response | Channels |
-|-------|----------|----------|
-| Critical | Immediate | Email + Webhook |
-| Warning | 4 hours | Email |
-| Info | Next business day | Email digest |
-
-**Deduplication**: Same alert not repeated within 1 hour cooldown.
-
-### 7.8 Multi-Repository Policy System
-
-> **Status**: Planned — not yet implemented. The policy file format is defined but the bot does not yet scan or enforce `.gitlab-bot.yml` files.
-
-> **Full Specification**: See [INTEGRATOR-BOT-PLAN.md](INTEGRATOR-BOT-PLAN.md) Section 7 for complete policy architecture.
-
-The Integrator Bot supports **per-project policy files** that enable distributed, project-aware automation.
-
-#### 7.8.1 Policy File: `.gitlab-bot.yml`
-
-Each GitLab repository can contain a `.gitlab-bot.yml` file that defines project-specific rules:
-
-```yaml
-# .gitlab-bot.yml - Per-project bot configuration
-version: 1
-
-# Project ownership for alerts
-owners:
-  primary: alice@example.com
-  backup: team-firmware@example.com
-
-# What to monitor
-monitors:
-  stale_branches:
-    enabled: true
-    max_age_days: 30
-    exclude: [main, develop, release/*]
-
-  dependency_vulnerabilities:
-    enabled: true
-    severity_threshold: high
-
-  ci_failures:
-    alert_after_consecutive: 3
-
-# What the bot can do automatically
-automations:
-  cleanup_merged_branches: true
-  artifact_retention_days: 30
-  auto_merge: false  # Dangerous - disabled by default
-
-# Compliance requirements
-compliance:
-  require_code_review: true
-  min_approvers: 1
-  required_ci_checks: [lint, test, security-scan]
-
-# Context documents for AI understanding
-context:
-  architecture: docs/ARCHITECTURE.md
-  bot_instructions: BOT-RESPONSIBILITIES.md
-```
-
-#### 7.8.2 Natural Language Context
-
-Projects can include a `BOT-RESPONSIBILITIES.md` file with natural language instructions:
-
-```markdown
-# Bot Responsibilities for firmware-sensor-v2
-
-## Context
-Safety-critical automotive firmware (ISO 26262 / ASIL-B).
-
-## Rules
-- NEVER auto-merge any MR
-- Alert IMMEDIATELY on security vulnerabilities
-- Flag any changes to interrupt handlers
-- Monitor binary size (max 256KB)
-```
-
-The AI-powered bot reads these documents to make context-aware decisions.
-
-#### 7.8.3 Default Policy
-
-Projects without `.gitlab-bot.yml` receive conservative defaults:
-- All automations disabled
-- Basic monitoring only (health, critical vulnerabilities)
-- Alerts sent to GitLab admin
-
-#### 7.8.4 Security Benefits
-
-| Benefit | Description |
-|---------|-------------|
-| **Distributed Control** | No single config file to compromise |
-| **Version-Controlled** | Policy changes go through merge requests |
-| **Auditable** | Full Git history of policy changes |
-| **Least Privilege** | Bot actions scoped per-project |
-| **Delegated Ownership** | Project teams manage their own rules |
+Example alert rules are in `monitoring/alerts.yml` (committed alongside the cron scripts).
 
 ---
 
@@ -1022,8 +807,7 @@ Projects without `.gitlab-bot.yml` receive conservative defaults:
 |-----------|--------|
 | GitLab Web | Azure AD SAML SSO + 2FA |
 | GitLab SSH | SSH keys (Ed25519 preferred) |
-| Admin Bot | API tokens + SSH keys |
-| Server SSH | SSH keys only, no password |
+| Server SSH | SSH keys only, no password; restricted by `trusted_ssh_ips` |
 
 ### 8.2 Authorization
 
@@ -1031,7 +815,6 @@ Projects without `.gitlab-bot.yml` receive conservative defaults:
 |------|--------------|
 | Admin | Full GitLab admin, server SSH |
 | Developer | Project access per group |
-| Bot | API read + specific write, restricted SSH commands |
 
 ### 8.3 Encryption
 
@@ -1040,45 +823,15 @@ Projects without `.gitlab-bot.yml` receive conservative defaults:
 | Transit | TLS 1.2+ everywhere |
 | At Rest (backups) | BorgBackup repokey-blake2 |
 | At Rest (volumes) | Hetzner default encryption |
-| Secrets | Environment variables (future: Vault) |
+| Secrets | Stored in `seed.yaml` (encrypted via sops/age recommended); rendered into `gitlab.rb` and `/etc/gitlab-backup.conf` at provisioning time |
 
 ### 8.4 Network Security
 
 - All inter-server communication over private network
 - Public access only through Load Balancer
 - Firewall default deny
-- Rate limiting on authentication endpoints
-
-### 8.5 Admin Bot Security
-
-**Principle of Least Privilege:**
-
-```bash
-# SSH restricted commands via authorized_keys
-command="/usr/local/bin/gitlab-admin-wrapper.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding ssh-ed25519 AAAA... admin-bot
-```
-
-**Wrapper script (`/usr/local/bin/gitlab-admin-wrapper.sh`) allows only:**
-
-| Category | Commands |
-|----------|----------|
-| GitLab Control | `gitlab-ctl status/stop/start/restart/reconfigure` |
-| Backup Operations | `gitlab-backup create/restore` |
-| GitLab Rake Tasks | `gitlab-rake gitlab:check/cleanup/env:info` |
-| Database | `gitlab-psql` (read-only queries) |
-| File Operations | `cat/ls/stat/find` on `/var/opt/gitlab/backups` and `/tmp` only |
-| System Monitoring | `df`, `free`, `uptime`, `nproc`, `cat /proc/loadavg`, `tail` |
-| Health Checks | `curl -s http://localhost/-/health/-/readiness/-/liveness` |
-| Borg Backup | `borg list/info/extract/create/prune` |
-| Maintenance | `gitlab-ctl registry-garbage-collect`, `logrotate` |
-
-**Implementation**: See `terraform/templates/gitlab-cloud-init.yaml` for the full wrapper script with the complete `ALLOWED_COMMANDS` array.
-
-**Security Notes:**
-- Commands are prefix-matched, not exact-matched (allows arguments)
-- All other commands are rejected with explicit error message
-- SSH agent forwarding, port forwarding, and X11 forwarding disabled
-- Wrapper logs all command attempts to syslog
+- SSH restricted to trusted CIDRs
+- Rate limiting on authentication endpoints (rack_attack)
 
 ---
 
@@ -1113,17 +866,16 @@ command="/usr/local/bin/gitlab-admin-wrapper.sh",no-port-forwarding,no-X11-forwa
 │   └── Rate limiting (rack_attack)                                        │
 │                                                                          │
 │   Layer 2: DETECTION                                                     │
-│   ├── AI-powered anomaly detection (Integrator Bot)                     │
-│   ├── File change monitoring                                            │
-│   ├── Auth log analysis                                                 │
-│   ├── Ransomware indicator scanning                                     │
-│   └── Backup integrity verification                                      │
+│   ├── Backup integrity verification (weekly `borg check`)               │
+│   ├── Restore-test success metric (weekly)                              │
+│   ├── Auth log analysis (fail2ban)                                      │
+│   └── Prometheus alerts on disk/file anomalies                          │
 │                                                                          │
 │   Layer 3: RECOVERY                                                      │
 │   ├── Borg backups (append-only, cannot delete)                         │
 │   ├── S3 immutable backups (Object Lock WORM)                           │
 │   ├── Offline quarterly backups                                         │
-│   └── Automated DR orchestration                                         │
+│   └── Operator-driven DR runbook (`scripts/restore-gitlab.sh`)          │
 │                                                                          │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
@@ -1132,33 +884,35 @@ command="/usr/local/bin/gitlab-admin-wrapper.sh",no-port-forwarding,no-X11-forwa
 
 | Destination | Delete Protection | Modification Protection | Retention |
 |-------------|-------------------|------------------------|-----------|
-| Borg Primary | Append-only (sub-account) | Encryption (repokey) | 30 days |
+| Borg Primary | Append-only (sub-account) | Encryption (repokey) | 12 months (monthlies) |
 | S3 Immutable | Object Lock Governance | Object Lock WORM | 90 days |
 | Offline | Physical separation | Air-gapped | 1 year |
 
 **Critical**: Full-access Borg credentials (for prune/delete) stored OFFLINE only.
 
-### 9.4 Ransomware Detection (via Integrator Bot)
+### 9.4 Ransomware Detection
 
-The Integrator Bot continuously monitors for ransomware indicators:
+Detection is deterministic and signal-based, not behavioural:
 
 | Indicator | Detection Method | Response |
 |-----------|-----------------|----------|
-| Mass file changes | File count delta > threshold | Alert + investigate |
-| Encrypted extensions | `.encrypted`, `.locked`, `.crypted` | Critical alert |
-| Ransom notes | Pattern match in filenames | Critical alert |
-| Suspicious processes | Unknown binaries, high CPU | Alert + recommend isolation |
-| Backup tampering | Integrity check failure | Critical alert + verify immutable |
+| Backup tampering | Weekly `borg check --repository-only`, metric → Alertmanager | Critical alert; verify immutable copy on S3 |
+| Backup absent | Backup-age metric > 4h | Critical alert |
+| Restore test fails | Weekly restore-test metric == 0 | Critical alert |
+| Mass file changes | Optional auditd / AIDE on `/var/opt/gitlab` | Critical alert |
+| Auth anomalies | fail2ban, SSH log review | Manual triage |
+
+Behavioural / heuristic detection of in-progress ransomware (encrypted file extensions, ransom notes, suspicious processes) is **out of scope** for this design — the recovery posture is the primary control. Operators may layer AIDE or auditd onto the server if desired.
 
 ### 9.5 Incident Response Procedure
 
-If ransomware is detected:
+If ransomware is suspected or confirmed:
 
 1. **DO NOT** shut down (preserve forensic evidence)
-2. **VERIFY** immutable backup integrity immediately
-3. **ISOLATE** network (requires human approval)
-4. **ASSESS** damage scope via Integrator Bot
-5. **RECOVER** from immutable backup (S3 Object Lock)
+2. **VERIFY** immutable backup integrity immediately (`borg check`, S3 listing)
+3. **ISOLATE** network (operator detaches LB target or revokes firewall)
+4. **ASSESS** damage scope (read-only inspection from a fresh workstation)
+5. **RECOVER** from immutable backup (S3 Object Lock) onto a new server
 6. **INVESTIGATE** root cause
 7. **DOCUMENT** incident
 
@@ -1166,62 +920,7 @@ See [SECURITY-ASSESSMENT.md](SECURITY-ASSESSMENT.md) for detailed procedures.
 
 ---
 
-## 10. Monitoring & Alerting
-
-### 10.1 Metrics Stack
-
-```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│   GitLab    │────►│ Prometheus  │────►│   Grafana   │
-│  Exporters  │     │   (TSDB)    │     │ (Dashboards)│
-└─────────────┘     └─────────────┘     └─────────────┘
-                           │
-                    ┌──────▼──────┐
-                    │ Alertmanager│
-                    └──────┬──────┘
-                           │
-              ┌────────────┼────────────┐
-              ▼            ▼            ▼
-         ┌────────┐  ┌──────────┐  ┌─────────┐
-         │ Email  │  │ Webhook  │  │   Log   │
-         └────────┘  └──────────┘  └─────────┘
-```
-
-### 10.2 Key Dashboards
-
-1. **GitLab Overview**: Users, projects, CI pipelines, response times
-2. **Infrastructure**: CPU, memory, disk, network
-3. **Backup Status**: Last backup time, size trends, verification results
-
-### 10.3 Alert Rules
-
-```yaml
-# Example Prometheus alert rules
-groups:
-  - name: gitlab
-    rules:
-      - alert: GitLabDown
-        expr: probe_success{job="gitlab-health"} == 0
-        for: 2m
-        labels:
-          severity: critical
-
-      - alert: DiskSpaceLow
-        expr: node_filesystem_avail_bytes{mountpoint="/var/opt/gitlab"} / node_filesystem_size_bytes < 0.1
-        for: 5m
-        labels:
-          severity: critical
-
-      - alert: BackupOverdue
-        expr: time() - gitlab_backup_last_success_timestamp > 14400
-        for: 5m
-        labels:
-          severity: critical
-```
-
----
-
-## 11. Implementation Plan
+## 10. Implementation Plan
 
 ### Phase 1: Infrastructure (Week 1)
 
@@ -1261,21 +960,20 @@ groups:
 
 **Deliverables**: Automated hourly backups, verified restore procedure
 
-### Phase 4: Admin Bot (Weeks 4-6)
+### Phase 4: Monitoring & Alerting (Week 4)
 
 | Task | Description |
 |------|-------------|
-| 4.1 | Set up Python project structure |
-| 4.2 | Implement health monitors |
-| 4.3 | Implement resource monitors |
-| 4.4 | Implement backup monitoring |
-| 4.5 | Implement alerting |
-| 4.6 | Implement backup verification |
-| 4.7 | Deploy as systemd service |
+| 4.1 | Install Prometheus, Alertmanager, Grafana (systemd) |
+| 4.2 | Install node_exporter, blackbox_exporter, gitlab-exporter |
+| 4.3 | Configure alert rules (`monitoring/alerts.yml`) |
+| 4.4 | Configure Alertmanager email/webhook routes |
+| 4.5 | Install textfile collector + cron-emitted metrics (backup age, borg check, restore test) |
+| 4.6 | Wire weekly restore-test cron to ephemeral VM |
 
-**Deliverables**: Running admin bot with monitoring and alerts
+**Deliverables**: Working monitoring stack with email alerts on failures
 
-### Phase 5: Testing & Documentation (Week 7)
+### Phase 5: Testing & Documentation (Week 5-6)
 
 | Task | Description |
 |------|-------------|
@@ -1289,9 +987,9 @@ groups:
 
 ---
 
-## 12. Verification & Testing
+## 11. Verification & Testing
 
-### 12.1 Test Cases
+### 11.1 Test Cases
 
 | ID | Test | Expected Result |
 |----|------|-----------------|
@@ -1302,9 +1000,9 @@ groups:
 | T05 | Run CI/CD pipeline | Pipeline executes, artifacts stored |
 | T06 | Verify backup exists | Backup file in Storage Box |
 | T07 | Restore from backup | GitLab functional after restore |
-| T08 | Admin bot alert | Email received within 5 minutes |
+| T08 | Alertmanager fires on simulated failure | Email/webhook received within 5 minutes |
 
-### 12.2 DR Drill Procedure
+### 11.2 DR Drill Procedure
 
 1. Schedule maintenance window
 2. Notify stakeholders
@@ -1316,34 +1014,34 @@ groups:
 
 ---
 
-## 13. Operational Procedures
+## 12. Operational Procedures
 
-### 13.1 Daily Checks (Automated by Admin Bot)
+### 12.1 Daily Checks (Automated via Prometheus/Grafana)
 
-- [ ] Health check passing
-- [ ] Backup completed in last hour
-- [ ] Disk usage < 80%
-- [ ] No critical alerts
+- [ ] GitLab `/-/health` returning 200
+- [ ] Most recent Borg archive < 4h old
+- [ ] Disk usage < 80% on `/var/opt/gitlab`
+- [ ] No firing alerts in Alertmanager
 
-### 13.2 Weekly Tasks
+### 12.2 Weekly Tasks
 
-- [ ] Review weekly report from admin bot
-- [ ] Check storage usage trends
-- [ ] Verify restore test passed
-- [ ] Review security advisories
+- [ ] Review Grafana dashboards for capacity / response trends
+- [ ] Confirm weekly restore-test metric is `1`
+- [ ] Confirm weekly `borg check` metric is `1`
+- [ ] Review GitLab security advisories
 
-### 13.3 Monthly Tasks
+### 12.3 Monthly Tasks
 
-- [ ] Apply security updates
+- [ ] Apply security updates (unattended-upgrades + reboot window)
 - [ ] Review access permissions
 - [ ] Capacity planning review
 
-### 13.4 Incident Response
+### 12.4 Incident Response
 
-1. **Detect**: Alert received or user report
+1. **Detect**: Alertmanager notification or user report
 2. **Triage**: Assess severity and impact
 3. **Communicate**: Notify stakeholders
-4. **Resolve**: Follow runbook or escalate
+4. **Resolve**: Follow runbook (`scripts/restore-gitlab.sh` for data-loss cases) or escalate
 5. **Document**: Post-incident report
 
 ---
@@ -1354,7 +1052,11 @@ groups:
 |------|----------|---------|
 | gitlab.rb | /etc/gitlab/gitlab.rb | Main GitLab config |
 | gitlab-secrets.json | /etc/gitlab/gitlab-secrets.json | Encryption keys (CRITICAL) |
-| config.yaml | /opt/admin-bot/config/ | Admin bot config |
+| gitlab-backup.conf | /etc/gitlab-backup.conf | Borg repo, passphrase, retention |
+| gitlab-s3-backup.conf | /etc/gitlab-s3-backup.conf | S3 immutable backup credentials |
+| prometheus.yml | /etc/prometheus/prometheus.yml | Prometheus scrape config |
+| alerts.yml | /etc/prometheus/alerts.yml | Alert rules |
+| alertmanager.yml | /etc/alertmanager/alertmanager.yml | Routing/receivers |
 
 ## Appendix B: Useful Commands
 
@@ -1374,8 +1076,9 @@ sudo gitlab-backup create STRATEGY=copy
 # List Borg backups
 borg list ssh://uXXXXX@uXXXXX.your-storagebox.de:23/./gitlab-borg
 
-# Admin bot logs
-journalctl -u gitlab-admin-bot -f
+# Alertmanager / Prometheus
+systemctl status prometheus alertmanager grafana-server
+journalctl -u prometheus -f
 ```
 
 ## Appendix C: Contact Information
@@ -1396,3 +1099,4 @@ journalctl -u gitlab-admin-bot -f
 | 1.1 | 2026-02-02 | Claude Code | Simplified to CPX31, backup-based DR |
 | 1.2 | 2026-02-02 | Claude Code | Added ransomware protection (Section 9), 3-2-1 backup strategy, security assessment integration |
 | 1.3 | 2026-02-02 | Claude Code | Added multi-repository policy system (Section 7.8), per-project .gitlab-bot.yml |
+| 2.0 | 2026-05-12 | Claude Code | Dropped the Admin Bot and the (planned) LLM-driven Integrator Bot. Monitoring/automation replaced by Prometheus + Alertmanager + cron on the GitLab server. Removed the dedicated admin-bot CX32 instance from infrastructure (~7 EUR/month savings). Removed Section 7.8 (per-repo bot policies). |

@@ -42,7 +42,7 @@ ssh_public_keys = {
   "admin-bob"   = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... bob@example.com"
 }
 
-# IP addresses allowed to SSH to the admin bot server (CIDR notation)
+# IP addresses allowed to SSH to the GitLab server (CIDR notation)
 # For security, restrict to your office/VPN IPs
 # Empty list allows SSH from anywhere (NOT recommended for production)
 
@@ -64,7 +64,7 @@ storage_box_user = "uXXXXX"
 # =============================================================================
 # Server Configuration
 # =============================================================================
-# Server types - adjust based on team size and workload
+# Server type - adjust based on team size and workload
 #
 # GitLab server options:
 #   cx31:  2 vCPU,  8 GB RAM (~8 EUR/mo)  - Small teams (5-10 devs)
@@ -72,12 +72,10 @@ storage_box_user = "uXXXXX"
 #   cpx41: 8 vCPU, 32 GB RAM (~35 EUR/mo) - Large teams (25-50 devs)
 #   cpx51: 16 vCPU, 64 GB RAM (~70 EUR/mo) - Enterprise (50+ devs)
 #
-# Admin Bot server options:
-#   cx22: 2 vCPU, 4 GB RAM (~4 EUR/mo)  - Minimal (monitoring only)
-#   cx32: 4 vCPU, 8 GB RAM (~7 EUR/mo)  - Standard with AI analysis [RECOMMENDED]
+# Prometheus, Grafana, Alertmanager, and the backup cron jobs run on the same
+# server alongside GitLab; no separate automation host is provisioned.
 
-gitlab_server_type    = "cpx31"
-admin_bot_server_type = "cx32"
+gitlab_server_type = "cpx31"
 
 # OS image (Ubuntu 24.04 LTS recommended for long-term support)
 server_image = "ubuntu-24.04"
@@ -109,9 +107,8 @@ network_cidr = "10.0.0.0/16"
 # Subnet CIDR
 subnet_cidr = "10.0.1.0/24"
 
-# Server private IPs (within subnet)
-gitlab_private_ip    = "10.0.1.10"
-admin_bot_private_ip = "10.0.1.30"
+# Server private IP (within subnet)
+gitlab_private_ip = "10.0.1.10"
 
 # =============================================================================
 # Resource Labels

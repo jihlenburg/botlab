@@ -1,7 +1,7 @@
 # Security Assessment & Disaster Recovery Analysis
 
-**Document Version**: 1.1
-**Date**: 2026-02-02
+**Document Version**: 2.0
+**Date**: 2026-05-12
 **Classification**: Internal - Technical Review
 
 ---
@@ -11,12 +11,12 @@
 | Document | Relationship |
 |----------|--------------|
 | [DESIGN.md](DESIGN.md) | Master design document - implements recommendations from this assessment |
-| [INTEGRATOR-BOT-PLAN.md](INTEGRATOR-BOT-PLAN.md) | Integrator Bot implements security monitoring and DR automation |
 
 **Implementation Status**: Recommendations from this assessment are incorporated into:
 - DESIGN.md Section 6.3.3 (3-2-1 Backup Strategy)
 - DESIGN.md Section 9 (Ransomware Protection)
-- INTEGRATOR-BOT-PLAN.md Sections 6.4-6.6 (Security MCP Servers)
+
+**Scope note (v2.0)**: The earlier "Admin Bot" and the planned LLM-driven "Integrator Bot" were removed from the architecture. Monitoring, alerting, and scheduled jobs are now handled by Prometheus + Alertmanager + cron on the GitLab server itself. References to bot-driven detection or DR orchestration in earlier versions have been updated accordingly.
 
 ---
 
@@ -59,30 +59,28 @@ This document provides a comprehensive security assessment of the ACME Corp GitL
 |--------|------------|--------|-------------------|
 | **Ransomware via compromised credentials** | Medium | Critical | 2FA required, SSO |
 | **Ransomware via supply chain (GitLab vulnerability)** | Low | Critical | Regular updates, monitoring |
-| **Ransomware via Admin Bot compromise** | Low | Critical | Restricted SSH commands |
 | **Insider threat (malicious admin)** | Low | Critical | Audit logging, separation of duties |
-| **Storage Box credential theft** | Low | Critical | Key-based auth, but keys on server |
-| **Hetzner account compromise** | Very Low | Critical | 2FA, but single point of failure |
+| **Storage Box credential theft** | Low | Critical | Key-based auth, append-only sub-account, admin key stored offline |
+| **Hetzner account compromise** | Very Low | Critical | 2FA, but single point of failure (mitigate with cross-provider S3 immutable backup) |
 
 ### 2.2 Attack Scenarios
 
 #### Scenario A: Ransomware Encrypts GitLab Server
 - **Attack**: Attacker gains access to GitLab server, encrypts all data
-- **Current Protection**: Backups exist on Storage Box
-- **Gap**: If attacker has prolonged access, they may:
-  1. Delete/encrypt Borg backups (have the passphrase from server)
-  2. Wait for old backups to be pruned before attacking
-  3. Compromise admin bot and delete backups via automation
+- **Current Protection**: Backups exist on Storage Box (append-only) and S3 (Object Lock)
+- **Residual gap**: If attacker has prolonged access they may:
+  1. Wait for old non-immutable backups to be pruned before attacking (mitigated by 12-month monthly retention and weekly S3 Object Lock copies)
+  2. Upload poisoned content into the append-only Borg repo (cannot delete real archives, but adds noise)
 
-#### Scenario B: Ransomware via Admin Bot
-- **Attack**: Attacker compromises Admin Bot, pivots to GitLab
-- **Current Protection**: SSH command restrictions, separate server
-- **Gap**: Admin Bot has Borg passphrase and SSH access to GitLab
-
-#### Scenario C: Supply Chain Attack
+#### Scenario B: Supply Chain Attack
 - **Attack**: Malicious GitLab update or dependency
 - **Current Protection**: None specific
-- **Gap**: Auto-updates could introduce compromised code
+- **Gap**: Auto-updates could introduce compromised code; pin GitLab version and review release notes before upgrading
+
+#### Scenario C: Stolen Storage Box / S3 Credentials
+- **Attack**: Attacker exfiltrates `/etc/gitlab-backup.conf` or S3 credentials from the GitLab server
+- **Current Protection**: Append-only Borg sub-account cannot delete archives; S3 Object Lock prevents modification
+- **Residual gap**: Attacker can read existing backups (data exfiltration risk) and upload poisoned content into either tier (cannot remove genuine backups, but increases recovery cost)
 
 ---
 
@@ -91,21 +89,31 @@ This document provides a comprehensive security assessment of the ACME Corp GitL
 ### 3.1 Current Backup Architecture
 
 ```
-GitLab Server                Admin Bot              Storage Box
-     │                           │                       │
-     │ hourly backup             │                       │
-     ├──────────────────────────►│                       │
-     │                           │ borg create           │
-     │                           ├──────────────────────►│
-     │                           │                       │
-     │                           │ borg prune            │
-     │                           ├──────────────────────►│
-     │                           │                       │
+GitLab Server (cron, hourly)              Storage Box
+     │                                          │
+     │ gitlab-backup create                     │
+     │ borg create  (append-only sub-account)   │
+     ├─────────────────────────────────────────►│
+     │                                          │
+     │ borg prune  (uses append-only key —      │
+     │              prune ignored by server     │
+     │              for archives outside its    │
+     │              own write window)           │
+     │                                          │
 
-PROBLEM: If GitLab server is compromised, attacker has:
-- /etc/gitlab-backup.conf (Borg passphrase)
-- SSH key to Storage Box
-- Ability to delete ALL backups including offsite
+GitLab Server (cron, weekly)              S3 (Object Lock)
+     │                                          │
+     │ aws s3 cp …  --object-lock-mode          │
+     ├─────────────────────────────────────────►│
+     │                                          │
+
+If the GitLab server is compromised, the attacker has:
+- /etc/gitlab-backup.conf (Borg passphrase, append-only key)
+- S3 credentials (Object Lock blocks deletion/overwrite)
+
+They CANNOT delete existing Borg archives or modify S3 objects under retention.
+They CAN read backups (data exfiltration risk) and pollute the repos with new
+poisoned archives. Full-access Borg key is stored OFFLINE only.
 ```
 
 ### 3.2 Ransomware Protection Gaps
@@ -172,8 +180,8 @@ Instead of storing Borg passphrase in config file:
 borg init --encryption=keyfile-blake2 $BORG_REPO
 # Keep keyfile offline, only upload for restores
 
-# Option 3: Admin Bot fetches passphrase from secure API at backup time
-# Adds dependency but removes passphrase from disk
+# Option 3: Backup script fetches passphrase from systemd-creds or sops at backup time
+# Adds dependency but removes plaintext passphrase from disk
 ```
 
 ---
@@ -187,16 +195,16 @@ borg init --encryption=keyfile-blake2 $BORG_REPO
 | GitLab server hardware failure | ✅ Yes | None | Terraform + restore |
 | GitLab server OS corruption | ✅ Yes | None | Terraform + restore |
 | GitLab data corruption | ✅ Yes | None | Restore from backup |
-| Admin Bot failure | ✅ Partial | No manual monitoring | Document manual procedures |
-| Storage Box failure | ❌ **No** | Single backup destination | Add secondary backup target |
-| Storage Box data corruption | ❌ **No** | No redundancy | Add secondary backup target |
-| Hetzner region outage | ❌ **No** | All resources in Falkenstein | Multi-region backup |
-| Hetzner account lockout | ❌ **No** | Cannot provision new servers | Offline Terraform state, documented manual recovery |
-| Both servers compromised simultaneously | ✅ Partial | If backups deleted, total loss | Immutable backups |
-| Borg repository corruption | ✅ Partial | Single Borg repo | Regular integrity checks |
+| Monitoring stack failure (Prometheus/Alertmanager down) | ⚠️ Partial | Operators stop seeing alerts | Dead-man's-switch: external uptime probe of GitLab + the Alertmanager itself |
+| Storage Box failure | ✅ Yes | None | S3 immutable backup as secondary destination |
+| Storage Box data corruption | ✅ Yes | None | Weekly `borg check` + S3 immutable copy |
+| Hetzner region outage | ⚠️ Partial | All primary resources in Falkenstein | Move S3 immutable copy to a non-Hetzner provider |
+| Hetzner account lockout | ❌ **No** | Cannot provision new servers | Offline Terraform state, documented manual recovery, cross-provider S3 backup |
+| Server compromised | ✅ Partial | Append-only Borg + S3 Object Lock prevent backup deletion | Operator-driven recovery using offline-stored full-access Borg key |
+| Borg repository corruption | ✅ Yes | None | Weekly `borg check`, S3 secondary |
 | DNS provider failure | ⚠️ Partial | Can update, but if provider down... | Secondary DNS |
 | Azure AD outage (SSO) | ⚠️ Partial | Users cannot login | Ensure local admin account exists |
-| Object storage failure | ⚠️ Partial | LFS/artifacts unavailable | Objects not backed up |
+| Object storage failure | ⚠️ Partial | LFS/artifacts unavailable | Objects not backed up; enable bucket versioning + cross-bucket replication |
 
 ### 4.2 Critical Edge Cases Requiring Attention
 
@@ -287,11 +295,11 @@ Geographic diversification:
 
 | Gap | Impact | Recommendation |
 |-----|--------|----------------|
-| No documented manual recovery | Can't recover if Admin Bot unavailable | Write manual runbook |
 | Recovery requires internet | Can't recover in network isolation | Document offline recovery |
 | Terraform state on local machine | Can't recover if state lost | Use remote state backend |
 | SSL certificates regenerated | Clients may have certificate pinning | Document cert migration |
 | Azure AD may need reconfiguration | SSO may break after recovery | Document SSO recovery steps |
+| `scripts/restore-gitlab.sh` is the only automation | Single-script failure mode | Keep procedure documented in plain text alongside the script |
 
 ---
 
@@ -304,7 +312,7 @@ Geographic diversification:
 | 2FA for GitLab | ✅ Enforced | 7-day grace period |
 | SSO via Azure AD | ✅ Configured | SAML 2.0 |
 | SSH key-only access | ✅ Enforced | No password auth |
-| Admin Bot restricted commands | ✅ Implemented | Wrapper script |
+| SSH source restricted to trusted CIDRs | ✅ Implemented | Hetzner firewall |
 | API token rotation | ⚠️ Manual | Should automate |
 
 ### 5.2 Network Security
@@ -323,9 +331,10 @@ Geographic diversification:
 |---------|--------|-------|
 | GitLab audit events | ✅ Enabled | Default CE logging |
 | SSH access logging | ✅ Enabled | /var/log/auth.log |
-| Backup success monitoring | ✅ Implemented | Admin Bot |
-| Intrusion detection | ❌ Not implemented | Consider fail2ban |
-| File integrity monitoring | ❌ Not implemented | Consider AIDE |
+| Backup success monitoring | ✅ Implemented | cron writes textfile metric → Prometheus → Alertmanager |
+| Backup integrity verification | ✅ Implemented | Weekly `borg check` cron → Prometheus metric |
+| Intrusion detection | ⚠️ Partial | fail2ban configured in cloud-init |
+| File integrity monitoring | ❌ Not implemented | Consider AIDE on `/var/opt/gitlab` and `/etc/gitlab` |
 
 ---
 
@@ -353,13 +362,13 @@ Geographic diversification:
    - Monthly backups kept for 12 months (changed from 6)
    - Updated in: `seed_schema.py`, `setup-borg-backup.sh`, `seed.example.yaml`
 
-5. **Implement backup integrity monitoring** — **IMPLEMENTED**
-   - `BackupMonitor.verify_integrity()` runs `borg check --repository-only`
-   - Prometheus gauge `gitlab_backup_integrity` (1=ok, 0=fail)
-   - Designed for weekly scheduled invocation
+5. **Implement backup integrity monitoring** — **PLANNED**
+   - Weekly cron runs `borg check --repository-only`
+   - Cron writes Prometheus textfile metric `gitlab_backup_integrity` (1=ok, 0=fail)
+   - Alertmanager fires Critical on `0` or missing metric > 8 days
 
-6. **Document manual recovery procedures**
-   - Enable recovery without Admin Bot
+6. **Document manual recovery procedures** — **IMPLEMENTED**
+   - `scripts/restore-gitlab.sh` is operator-driven; runbook lives next to the script
    - Effort: 4 hours
    - Cost: $0
 
