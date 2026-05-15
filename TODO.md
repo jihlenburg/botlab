@@ -61,10 +61,11 @@
 - [ ] **Monitoring & Alerting Setup**
   - [ ] Install Prometheus, Alertmanager, Grafana on the GitLab server (systemd)
   - [ ] Install node_exporter, blackbox_exporter, gitlab-exporter
-  - [ ] Author alert rules (`monitoring/alerts.yml`): `GitLabDown`, `DiskSpaceLow`, `BackupOverdue`, `BorgIntegrityFail`, `RestoreTestFail`, `SSLExpiringSoon`
-  - [ ] Configure Alertmanager email + webhook routes
-  - [ ] Wire textfile collector for cron-emitted metrics
+  - [x] Author alert rules (`monitoring/alerts.yml`): `GitLabDown`, `DiskSpace*`, `Memory*`, `CPU*`, `BackupOverdue*`, `BorgIntegrityFail`, `BorgCheckStale`, `RestoreTestFail`, `RestoreTestStale`, `SSLExpiring*`, `Watchdog`
+  - [ ] Configure Alertmanager email + webhook routes (including the `Watchdog` webhook to the external observer)
+  - [ ] Wire textfile collector for cron-emitted metrics (`gitlab_backup_last_success_timestamp`, `gitlab_backup_integrity`, `gitlab_restore_test_success`)
   - [ ] Wire weekly restore-test cron (`scripts/`) to ephemeral CX21 VM and emit metric
+  - [ ] Provision external observer (recommended: ~5 EUR/mo non-Hetzner VPS running blackbox_exporter + a webhook receiver). See DESIGN.md §7.5.
 
 - [ ] **End-to-End DR Test**
   - [ ] Trigger full backup
@@ -84,8 +85,8 @@
 - [ ] Move S3 immutable copy to a non-Hetzner provider (Wasabi/B2/AWS) to decouple from Hetzner account lockout risk
 - [ ] Create offline backup recovery kit (Borg admin key, Terraform state snapshot, gitlab-secrets.json)
 - [ ] Configure fail2ban on the GitLab server (currently set up in cloud-init — verify in prod)
-- [ ] Adopt sops/age (or systemd-creds) for secrets on disk, replacing plaintext in `/etc/gitlab/gitlab.rb` and `/etc/gitlab-backup.conf`
-- [ ] Pin GitLab CE version and document the upgrade runbook
+- [ ] Adopt sops/age (or systemd-creds) for secrets on disk, replacing plaintext in `/etc/gitlab/gitlab.rb` and `/etc/gitlab-backup.conf` (see DESIGN.md Appendix C for the documented approach)
+- [x] Pin GitLab CE version and document the upgrade runbook — `seed.gitlab.version`, threaded through Terraform, `apt-mark hold` in cloud-init; runbook in DESIGN.md §5.6
 - [ ] Security audit of configurations
 
 ### Phase 6: Future Enhancements (Priority: LOW)

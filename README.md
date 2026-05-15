@@ -76,14 +76,17 @@ terraform apply
 
 ### Install GitLab
 
-SSH to the provisioned server and run:
+Cloud-init on the GitLab server already installs the pinned version of GitLab CE
+(see `gitlab.version` in `seed.yaml`). If you need to install manually:
 
 ```bash
 curl https://packages.gitlab.com/install/repositories/gitlab/gitlab-ce/script.deb.sh | sudo bash
-sudo EXTERNAL_URL="https://gitlab.example.com" apt-get install gitlab-ce
+sudo EXTERNAL_URL="https://gitlab.example.com" apt-get install "gitlab-ce=17.10.0-ce.0"
+sudo apt-mark hold gitlab-ce
 ```
 
-See `docs/DESIGN.md` for complete configuration.
+See `docs/DESIGN.md` §5 for complete configuration, §5.6 for the upgrade runbook,
+and `docs/DEPLOY.md` for the ordered first-deploy checklist.
 
 ### Set up backups
 
@@ -149,6 +152,8 @@ Earlier drafts (v1.x) proposed an "Admin Bot" (Python service) and a planned LLM
 |----------|-------------|
 | [DESIGN.md](docs/DESIGN.md) | Complete technical specification (master document) |
 | [SECURITY-ASSESSMENT.md](docs/SECURITY-ASSESSMENT.md) | Security & ransomware protection analysis |
+| [DEPLOY.md](docs/DEPLOY.md) | First-deploy checklist for operators |
+| [RUNBOOK-RECOVERY.md](docs/RUNBOOK-RECOVERY.md) | Operator-facing disaster recovery runbook |
 | [CLAUDE.md](CLAUDE.md) | AI assistant instructions |
 
 ## Cost Breakdown

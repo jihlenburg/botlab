@@ -65,8 +65,9 @@ def _generate_terraform_tfvars(seed: SeedConfig) -> str:
 
         hcloud_token = "{infra.hetzner.api_token}"
 
-        domain      = "{seed.gitlab.domain}"
-        admin_email = "{org.admin_email}"
+        domain         = "{seed.gitlab.domain}"
+        admin_email    = "{org.admin_email}"
+        gitlab_version = "{seed.gitlab.version}"
 
         ssh_public_keys = {ssh_keys_block}
 

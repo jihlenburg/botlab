@@ -14,6 +14,8 @@ ACME Corp GitLab CE on Hetzner Cloud. Backups via BorgBackup (append-only) and o
 |----------|---------|----------|
 | `docs/DESIGN.md` | **Master design document** - authoritative specification | READ FIRST |
 | `docs/SECURITY-ASSESSMENT.md` | Cybersecurity analysis, ransomware protection, DR edge cases | Security |
+| `docs/DEPLOY.md` | First-deploy checklist for operators | Deployment |
+| `docs/RUNBOOK-RECOVERY.md` | Operator-facing DR runbook | Incidents |
 
 All implementation decisions must align with DESIGN.md. If changes are needed, update DESIGN.md first.
 
@@ -57,7 +59,9 @@ botlab/
 ├── seed.example.yaml               # Seed config template (copy to seed.yaml)
 ├── docs/
 │   ├── DESIGN.md                   # Master design document (READ FIRST)
-│   └── SECURITY-ASSESSMENT.md      # Security & ransomware analysis
+│   ├── SECURITY-ASSESSMENT.md      # Security & ransomware analysis
+│   ├── DEPLOY.md                   # First-deploy checklist for operators
+│   └── RUNBOOK-RECOVERY.md         # Operator-facing DR runbook
 ├── terraform/                      # Infrastructure as code
 │   ├── *.tf                        # Hetzner Cloud resources
 │   ├── terraform.tfvars.example    # Example configuration (copy to terraform.tfvars)
@@ -70,6 +74,8 @@ botlab/
 │   ├── backup-to-s3.sh             # S3 immutable backup (Object Lock)
 │   ├── restore-gitlab.sh           # DR restore procedure
 │   └── verify-backup.sh            # Backup verification
+├── monitoring/                     # Prometheus alert rules
+│   └── alerts.yml
 ├── .github/workflows/              # CI/CD pipeline
 │   └── test.yml                    # shellcheck, terraform validate
 ├── Makefile                        # Common development commands

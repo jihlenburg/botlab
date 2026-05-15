@@ -39,6 +39,9 @@ fi
 
 GITLAB_DOMAIN="${GITLAB_DOMAIN:-gitlab.example.com}"
 ADMIN_EMAIL="${ADMIN_EMAIL:-admin@example.com}"
+# Pinned GitLab CE apt package version. Must match seed.gitlab.version.
+# See docs/DESIGN.md §5.6 for the upgrade runbook.
+GITLAB_VERSION="${GITLAB_VERSION:-17.10.0-ce.0}"
 
 # Check if GitLab is already installed
 if command -v gitlab-ctl &> /dev/null; then
@@ -54,8 +57,9 @@ else
     # Add GitLab repository
     curl https://packages.gitlab.com/install/repositories/gitlab/gitlab-ce/script.deb.sh | bash
 
-    # Install GitLab CE
-    EXTERNAL_URL="https://${GITLAB_DOMAIN}" apt-get install -y gitlab-ce
+    # Install GitLab CE (pinned)
+    EXTERNAL_URL="https://${GITLAB_DOMAIN}" apt-get install -y "gitlab-ce=${GITLAB_VERSION}"
+    apt-mark hold gitlab-ce
 fi
 
 # -----------------------------------------------------------------------------

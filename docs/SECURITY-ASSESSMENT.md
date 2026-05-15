@@ -124,7 +124,7 @@ poisoned archives. Full-access Borg key is stored OFFLINE only.
 | **Passphrase on server** | HIGH | Borg passphrase stored in /etc/gitlab-backup.conf |
 | **No air-gapped backup** | HIGH | All backups accessible via network |
 | **No backup integrity monitoring** | MEDIUM | Would not detect tampering until restore |
-| **Retention enables attack timing** | MEDIUM | 30-day retention allows attacker to wait |
+| **Retention enables attack timing** | LOW (mitigated) | Default retention is 12 months (monthlies); a delayed-activation attacker would need to dwell longer than that AND defeat the weekly S3 Object Lock copies |
 
 ### 3.3 Recommended Ransomware Mitigations
 
@@ -248,19 +248,17 @@ Implement 3-2-1 backup rule:
 
 #### Edge Case 3: Ransomware with Delayed Activation
 
-**Current State**: 30-day backup retention
-**Risk**: Attacker plants malware, waits 30+ days, then activates
-- All backups would contain the dormant malware
-- Clean restore impossible
+**Current State**: 12-month monthly retention on Borg + 90-day Object Lock on S3
+**Residual risk**: Attacker plants malware, waits longer than the retention window, then activates
+- Borg archives older than 12 months are pruned and would be unrecoverable
+- The weekly S3 Object Lock copy is the deepest "clean" tier we keep online; an attacker would need to dwell > 90 days AND defeat S3 Object Lock COMPLIANCE mode
 
-**Recommendation**:
+**Further mitigations**:
 ```
-1. Extend retention for monthly backups (6-12 months)
-2. Keep quarterly offline backups (USB/external drive)
-3. Implement backup integrity monitoring:
-   - Hash validation
-   - Size anomaly detection
-   - Content sampling
+1. Quarterly offline backups (USB/external drive) provide a 1-year air-gapped tier
+2. Weekly `borg check --repository-only` catches tampering, not malware presence
+3. Optional file-integrity monitoring (AIDE/auditd) on /var/opt/gitlab would
+   flag in-progress encryption before it reaches the next backup window
 ```
 
 #### Edge Case 4: Object Storage Data Loss
@@ -464,7 +462,7 @@ Primary: GitLab local backups (hourly, 24h retention)
     └── Media: Local SSD
     └── Location: GitLab server
 
-Secondary: Borg to Storage Box (hourly, 30 day retention)
+Secondary: Borg to Storage Box (hourly creation, 12-month monthly retention)
     └── Media: HDD array
     └── Location: Hetzner Falkenstein (different DC)
 

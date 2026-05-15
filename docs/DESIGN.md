@@ -1,7 +1,7 @@
 # ACME Corp GitLab Infrastructure - Master Design Document
 
-**Version**: 2.0
-**Last Updated**: 2026-05-12
+**Version**: 2.1
+**Last Updated**: 2026-05-15
 **Status**: Draft - Pending Approval
 
 ---
@@ -11,6 +11,8 @@
 | Document | Purpose |
 |----------|---------|
 | [SECURITY-ASSESSMENT.md](SECURITY-ASSESSMENT.md) | Cybersecurity analysis, ransomware protection, DR edge cases |
+| [DEPLOY.md](DEPLOY.md) | First-deploy checklist for operators |
+| [RUNBOOK-RECOVERY.md](RUNBOOK-RECOVERY.md) | Operator-facing disaster recovery runbook |
 
 ---
 
@@ -321,13 +323,16 @@ The previous design also provisioned a dedicated admin-bot server (CX32, ~7 EUR/
 ### 5.1 Installation
 
 **Method**: Omnibus package (gitlab-ce)
-**Version**: Latest stable
+**Version**: **Pinned** in `seed.yaml` (`gitlab.version`) and re-pinned with `apt-mark hold` on the server. Default `17.10.0-ce.0`. See §5.6 for the upgrade runbook.
 **OS**: Ubuntu 24.04 LTS
 
 ```bash
 curl https://packages.gitlab.com/install/repositories/gitlab/gitlab-ce/script.deb.sh | sudo bash
-sudo EXTERNAL_URL="https://gitlab.example.com" apt-get install gitlab-ce
+sudo EXTERNAL_URL="https://gitlab.example.com" apt-get install "gitlab-ce=17.10.0-ce.0"
+sudo apt-mark hold gitlab-ce
 ```
+
+The pin is threaded automatically by cloud-init: Terraform reads `gitlab_version` (generated from `seed.yaml`) and renders it into the apt install command, then holds the package.
 
 ### 5.2 Core Configuration
 
@@ -507,6 +512,54 @@ gitlab_rails['omniauth_providers'] = [
 *.jpeg filter=lfs diff=lfs merge=lfs -text
 ```
 
+### 5.6 Version Pinning & Upgrade Runbook
+
+GitLab CE is pinned to a specific apt package version in `seed.yaml` (`gitlab.version`), threaded into Terraform (`gitlab_version`), and held on the server with `apt-mark hold gitlab-ce`. This prevents `unattended-upgrades` or a stray `apt-get upgrade` from silently rolling the major version forward and breaking the schema migrations or omnibus configuration.
+
+**Why pinning matters:**
+- GitLab has had backwards-incompatible migrations *within* minor releases. A surprise upgrade during a backup window can leave the DB in an unrunnable state.
+- The weekly restore-test (§6.5) installs the same pinned version on the ephemeral VM, so restore is tested against the version actually deployed — not whatever happens to be "latest stable" that week.
+- Skipping required intermediate versions is unsupported by GitLab; pinning forces a deliberate upgrade path.
+
+**Upgrade procedure** (operator-driven, typically once per minor release):
+
+1. **Read the release notes** for every version between current and target. Pay special attention to:
+   - Required upgrade stops (GitLab publishes a [version-paths matrix](https://docs.gitlab.com/ee/update/index.html#upgrade-paths))
+   - Deprecated features your team uses
+   - Background-migration warnings
+2. **Take a fresh backup**: `sudo gitlab-backup create STRATEGY=copy` and verify it landed in Borg
+3. **Run the restore-test cron manually** with the *current* pinned version to confirm rollback is possible
+4. **Update the pin** in `seed.yaml` (`gitlab.version`), regenerate `terraform.tfvars`:
+   ```bash
+   python scripts/seed_bootstrap.py seed.yaml --target terraform
+   ```
+5. **Stage the upgrade** on the GitLab server:
+   ```bash
+   ssh root@<gitlab-server>
+   sudo apt-mark unhold gitlab-ce
+   sudo apt-get update
+   sudo apt-get install gitlab-ce=<new-version>
+   sudo apt-mark hold gitlab-ce
+   ```
+6. **Wait for background migrations** to complete:
+   ```bash
+   sudo gitlab-rake gitlab:background_migrations:status
+   ```
+   Do not start a second upgrade step until this returns clean.
+7. **Verify**:
+   ```bash
+   sudo gitlab-rake gitlab:check SANITIZE=true
+   sudo gitlab-ctl status
+   curl -fsS https://<domain>/-/health
+   ```
+8. **Commit the seed change** so the pin in version control matches reality
+
+**If the upgrade fails:**
+- The append-only Borg backup taken in step 2 is the rollback. Run `scripts/restore-gitlab.sh` against a freshly provisioned server (or the same one after `gitlab-ctl cleanse`).
+- Do NOT attempt to `apt-get install gitlab-ce=<old-version>` over a partially-upgraded omnibus — the schema may be ahead of the binary.
+
+**Cadence**: at minimum, follow GitLab's [security release cadence](https://about.gitlab.com/releases/) (patches monthly). For minor versions, batch quarterly. Pin to the patch level always.
+
 ---
 
 ## 6. Disaster Recovery Design
@@ -544,7 +597,7 @@ Instead of maintaining a hot standby (expensive, complex), we rely on:
 | Backup Type | Frequency | Retention | Destination |
 |-------------|-----------|-----------|-------------|
 | GitLab backup | Hourly | 24 hours local | /var/opt/gitlab/backups |
-| BorgBackup sync | Hourly | 30 days | Storage Box (append-only) |
+| BorgBackup sync | Hourly | 12 months (monthlies) | Storage Box (append-only) |
 | **Immutable backup** | Weekly | 90 days | S3 with Object Lock |
 | Config backup | On change + daily | 90 days | Storage Box |
 | Volume snapshots | Every 6 hours | 7 days | Hetzner |
@@ -624,8 +677,13 @@ borg create --stats --compression zstd \
     /etc/gitlab/gitlab.rb \
     /etc/gitlab/gitlab-secrets.json
 
-# Prune old backups
-borg prune --keep-hourly=24 --keep-daily=7 --keep-weekly=4 --keep-monthly=6 \
+# Prune old backups (retention sourced from /etc/gitlab-backup.conf, generated
+# from seed.yaml via `python scripts/seed_bootstrap.py seed.yaml --target borg-conf`)
+borg prune \
+    --keep-hourly="$BACKUP_KEEP_HOURLY" \
+    --keep-daily="$BACKUP_KEEP_DAILY" \
+    --keep-weekly="$BACKUP_KEEP_WEEKLY" \
+    --keep-monthly="$BACKUP_KEEP_MONTHLY" \
     "$BORG_REPO"
 
 # Clean local backups older than 24h
@@ -639,78 +697,29 @@ find /var/opt/gitlab/backups -name "*_gitlab_backup.tar" -mtime +1 -delete
 
 ### 6.4 Recovery Procedure
 
-#### 6.4.1 Recovery Timeline
+The operator-facing step-by-step procedure lives in [RUNBOOK-RECOVERY.md](RUNBOOK-RECOVERY.md). This section captures only the design-level summary.
 
-| Step | Duration | Description |
-|------|----------|-------------|
-| 1 | 2-5 min | Provision new CPX31 via Terraform |
-| 2 | 10-15 min | Install GitLab CE |
-| 3 | 5 min | Restore config files from Borg |
-| 4 | 30-60 min | Restore GitLab backup |
-| 5 | 5 min | Reconfigure and verify |
-| 6 | 5 min | Update DNS |
+| Step | Duration | What happens |
+|------|----------|--------------|
+| 1 | 5 min | Triage — confirm recovery is needed, not in-place repair |
+| 2 | 10 min | Verify backup integrity on the recovery workstation (Borg or S3 fallback) |
+| 3 | 5 min | Provision replacement CPX31 via `terraform apply -target=...` |
+| 4 | 5 min | Restore `gitlab.rb` and `gitlab-secrets.json` from Borg |
+| 5 | 30-60 min | Restore GitLab tarball (`gitlab-backup restore`) |
+| 6 | 5 min | `gitlab-ctl reconfigure` and verification (`gitlab:check`, sample clone, login) |
+| 7 | 5 min | Re-point LB target (or update DNS if LB also lost) |
+| 8 | — | Post-recovery: rotate every credential, capture forensic image if compromise suspected, run a fresh backup, write the post-incident report |
 | **Total** | **~1-2 hours** | |
 
-#### 6.4.2 Detailed Recovery Steps
+Design notes:
+- Recovery is **operator-driven**. There is no autonomous agent; a human runs the runbook end-to-end.
+- The Borg full-access key required for step 4-5 lives **offline only** — the append-only key on the GitLab server cannot decrypt archives. Step 4-5 happen on a recovery workstation, not the new server.
+- If the entire Hetzner account is lost, Terraform state from the offline kit drives a rebuild in a fresh account. RTO doubles to ~3 hours in that case (Appendix B in the runbook).
 
-**Step 1: Provision new server**
-```bash
-cd terraform
-terraform apply -target=hcloud_server.gitlab_primary
-```
-
-**Step 2: Install GitLab CE**
-```bash
-ssh root@<new-server>
-curl https://packages.gitlab.com/install/repositories/gitlab/gitlab-ce/script.deb.sh | bash
-apt-get install gitlab-ce
-```
-
-**Step 3: Restore configuration**
-```bash
-# On a recovery workstation (offline-keyed Borg access)
-export BORG_REPO="ssh://uXXXXX@uXXXXX.your-storagebox.de:23/./gitlab-borg"
-borg extract "${BORG_REPO}::latest" etc/gitlab
-
-scp etc/gitlab/gitlab.rb root@<new-server>:/etc/gitlab/
-scp etc/gitlab/gitlab-secrets.json root@<new-server>:/etc/gitlab/
-```
-
-**Step 4: Restore GitLab backup**
-```bash
-# Extract backup from Borg
-borg extract "${BORG_REPO}::latest" var/opt/gitlab/backups
-
-# Copy to new server
-scp var/opt/gitlab/backups/*_gitlab_backup.tar root@<new-server>:/var/opt/gitlab/backups/
-
-# On new server
-gitlab-ctl stop puma
-gitlab-ctl stop sidekiq
-gitlab-backup restore BACKUP=<timestamp>
-```
-
-**Step 5: Reconfigure and verify**
-```bash
-gitlab-ctl reconfigure
-gitlab-ctl restart
-gitlab-rake gitlab:check SANITIZE=true
-```
-
-**Step 6: Update DNS**
-```bash
-# Update gitlab.example.com to new server IP
-# Or update Load Balancer backend
-```
-
-#### 6.4.3 Recovery Tooling
-
-Recovery is an operator-driven procedure, supported by:
-- `scripts/restore-gitlab.sh` — full restore from Borg with verification and rollback support
-- `scripts/verify-backup.sh` — JSON-output backup health check
-- `terraform apply` to provision the replacement server
-
-There is no autonomous recovery agent. A human runs the script with a fresh server's address and a backup identifier.
+Supporting tools:
+- `scripts/restore-gitlab.sh` — opinionated wrapper around runbook steps 4-6
+- `scripts/verify-backup.sh` — JSON-output sanity check on a candidate backup
+- `terraform apply -target=...` — provisions the replacement
 
 ### 6.5 Backup Verification (Weekly Automated)
 
@@ -795,7 +804,33 @@ Alertmanager handles routing and deduplication. Operators receive:
 | Warning | Email | Every 12h until resolved |
 | Info | Email digest | Daily |
 
-Example alert rules are in `monitoring/alerts.yml` (committed alongside the cron scripts).
+Alert rules live in `monitoring/alerts.yml` (committed in this repo). Load them via Prometheus's `rule_files:` directive.
+
+### 7.5 External Observer (Dead-Man's-Switch)
+
+Prometheus, Alertmanager, and Grafana all run on the GitLab server itself. That's the right trade-off at this scale (one box to patch, no extra credentials) but it creates a blind spot: if the GitLab server is unreachable, on fire, or compromised, **the very thing that would alert you about that is also down**.
+
+The mitigation is a small external observer that lives outside this Hetzner account and watches the stack from the outside.
+
+**What it watches:**
+
+1. **Public LB endpoint** — HTTPS probe of `https://<domain>/-/health` every 1–5 minutes. Alerts if probes fail for ≥ 5 minutes. This catches "GitLab itself is down" even when our own Alertmanager can't tell us.
+2. **Alertmanager Watchdog** — `monitoring/alerts.yml` defines a `Watchdog` alert that fires constantly (`expr: vector(1)`, severity `none`). Alertmanager dispatches it to a webhook on the external observer. The observer alerts on its *absence* for > 5 minutes — that's how we learn the on-box monitoring stack has stopped working.
+
+**Where it runs** — the observer must not share a failure domain with what it observes:
+
+| Option | Cost | Pros / cons |
+|--------|------|-------------|
+| Public uptime service (UptimeRobot, BetterStack, HetrixTools, etc.) free tier | 0 EUR/mo | Easiest. Solves the LB probe. Some free tiers don't accept inbound webhooks, which limits the Watchdog half. |
+| Tiny VPS on a non-Hetzner provider (Vultr / Linode / OVH, 1 vCPU / 1 GB) running blackbox_exporter + a webhook receiver | ~5 EUR/mo | Full coverage of both signals. Survives a Hetzner-wide outage or account lockout. **Recommended.** |
+| Dedicated monitoring node on Hetzner in a different DC (Nuremberg/Helsinki) | ~4 EUR/mo | Cheaper, but does not survive Hetzner account-level problems. Only worth it if you also want full Prometheus+Grafana off-box. |
+
+**What it does NOT do:**
+
+- It is not a second Prometheus/Grafana. It runs *only* the two probes above. Any temptation to give it credentials, cron jobs, or "while we're here, let's also..." should be resisted — that is how you slowly rebuild the admin-bot we just removed.
+- It does not solve Hetzner account compromise on its own. The cross-provider S3 immutable backup tier is still the right control for that.
+
+**Implementation status**: not yet provisioned. The `Watchdog` alert is committed; Alertmanager routing for the watchdog webhook and the external probe itself are tracked in `TODO.md` under Phase 4.
 
 ---
 
@@ -839,7 +874,7 @@ Example alert rules are in `monitoring/alerts.yml` (committed alongside the cron
 
 > **Full Analysis**: See [SECURITY-ASSESSMENT.md](SECURITY-ASSESSMENT.md) for complete threat model and recommendations.
 >
-> **Implementation status**: Append-only Borg setup (`scripts/setup-borg-append-only.sh`), S3 immutable backups (`scripts/backup-to-s3.sh`), integrity verification (`BackupMonitor.verify_integrity()`), and extended retention (12 months) are implemented.  Seed configuration supports S3 via `backup.s3` section.
+> **Implementation status**: Append-only Borg setup (`scripts/setup-borg-append-only.sh`), S3 immutable backups (`scripts/backup-to-s3.sh`), and extended retention (12 months) are implemented. Weekly `borg check --repository-only` integrity verification is wired through cron + the Prometheus textfile collector (see Section 7). Seed configuration supports S3 via `backup.s3` section.
 
 ### 9.1 Threat Summary
 
@@ -1081,7 +1116,102 @@ systemctl status prometheus alertmanager grafana-server
 journalctl -u prometheus -f
 ```
 
-## Appendix C: Contact Information
+## Appendix C: Secrets Management with sops + age
+
+The current default keeps `seed.yaml` as a plaintext file on the operator's workstation (chmod 0600, gitignored). For production deployments this should be encrypted with [sops](https://github.com/getsops/sops) keyed to [age](https://age-encryption.org/) recipients. age is a small, modern alternative to GPG with no key-server complications.
+
+**One-time setup (per operator):**
+
+```bash
+# Install
+brew install sops age      # macOS
+# or: apt-get install age && go install github.com/getsops/sops/v3/cmd/sops@latest
+
+# Generate an age keypair (private key goes in ~/.config/sops/age/keys.txt)
+age-keygen -o ~/.config/sops/age/keys.txt
+# Public key is printed; share it with other operators who need access
+```
+
+**Configure sops for this repo** (`.sops.yaml` at repo root):
+
+```yaml
+creation_rules:
+  - path_regex: ^seed\.yaml$
+    age: >-
+      age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aq0wp6j2,
+      age1lggyhqrw2nlhcxprm67z43rta597azn8gknawjehu9d9dl0jq3yqqvfafg
+```
+
+List every operator's age **public** key in the `age:` line.
+
+**Encrypt your seed**:
+
+```bash
+sops --encrypt --in-place seed.yaml
+# Now seed.yaml is encrypted in place. Safe to commit, keep on USB, etc.
+# (Still gitignored by default — opt in deliberately if you decide to commit it.)
+```
+
+**Edit the encrypted seed**:
+
+```bash
+sops seed.yaml             # decrypts in $EDITOR, re-encrypts on save
+```
+
+**Use at deploy time**:
+
+```bash
+# Decrypt to stdout (no plaintext file on disk)
+sops --decrypt seed.yaml > /tmp/seed.plain.yaml
+python scripts/seed_bootstrap.py /tmp/seed.plain.yaml --target all
+shred -u /tmp/seed.plain.yaml
+```
+
+Or, with sops's `exec-file` to avoid the temp file entirely:
+
+```bash
+sops exec-file --no-fifo seed.yaml \
+  'python scripts/seed_bootstrap.py {} --target all'
+```
+
+**For server-side secrets** (`/etc/gitlab/gitlab.rb`, `/etc/gitlab-backup.conf`, `/etc/gitlab-s3-backup.conf`):
+
+These currently end up plaintext on disk. Two options to harden:
+
+1. **`systemd-creds`** (simplest, ships with systemd 250+):
+   ```bash
+   # Encrypt a credential
+   echo "$BORG_PASSPHRASE" | systemd-creds encrypt - /etc/credstore.encrypted/borg_passphrase
+   # In the unit file:
+   #   LoadCredentialEncrypted=borg_passphrase
+   # Inside the script, read from $CREDENTIALS_DIRECTORY/borg_passphrase
+   ```
+
+2. **sops on the server** (more flexible, requires an age key on the server):
+   - Generate an age key on the server, keep its **private** half on the box only
+   - Encrypt `gitlab-backup.conf` with sops keyed to that age recipient
+   - Decrypt on demand in `/usr/local/bin/gitlab-backup-to-borg.sh`:
+     ```bash
+     eval "$(sops --decrypt /etc/gitlab-backup.conf.sops)"
+     ```
+   - The trade-off: a server-resident age key is still on the box, just not next to the secret. Better than plaintext, weaker than a real HSM.
+
+**Key rotation** (Borg passphrase):
+
+```bash
+# On the recovery workstation with full-access key loaded
+borg key change-passphrase "$BORG_REPO"
+# Update seed.yaml, re-render /etc/gitlab-backup.conf on the server,
+# update the offline kit, document the rotation date.
+```
+
+Recommended rotation cadence: every 12 months, or immediately after any operator with knowledge of the key leaves the team.
+
+**What this appendix deliberately doesn't recommend**: HashiCorp Vault. It's the right tool for a 50-server fleet, not for a single GitLab box. The operational overhead (HA Vault cluster, unsealing, audit log integration) exceeds the security benefit at this scale.
+
+---
+
+## Appendix D: Contact Information
 
 | Role | Contact |
 |------|---------|
@@ -1100,3 +1230,4 @@ journalctl -u prometheus -f
 | 1.2 | 2026-02-02 | Claude Code | Added ransomware protection (Section 9), 3-2-1 backup strategy, security assessment integration |
 | 1.3 | 2026-02-02 | Claude Code | Added multi-repository policy system (Section 7.8), per-project .gitlab-bot.yml |
 | 2.0 | 2026-05-12 | Claude Code | Dropped the Admin Bot and the (planned) LLM-driven Integrator Bot. Monitoring/automation replaced by Prometheus + Alertmanager + cron on the GitLab server. Removed the dedicated admin-bot CX32 instance from infrastructure (~7 EUR/month savings). Removed Section 7.8 (per-repo bot policies). |
+| 2.1 | 2026-05-15 | Claude Code | Pinned GitLab version (new §5.6 upgrade runbook); added §7.5 external dead-man's-switch observer; reconciled backup retention numbers (12-month monthlies everywhere); fixed cloud-init backup script to honour `/etc/gitlab-backup.conf`. Extracted DR steps to `RUNBOOK-RECOVERY.md`; added first-deploy `DEPLOY.md`; added Appendix C (sops + age secrets management); shipped starter `monitoring/alerts.yml` including the `Watchdog` dead-man alert. |

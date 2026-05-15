@@ -72,6 +72,8 @@ class InfrastructureConfig(BaseModel):
 class GitLabConfig(BaseModel):
     domain: str
     private_token: str
+    # Pinned apt package version (e.g. "17.10.0-ce.0"). See seed.example.yaml.
+    version: str = "17.10.0-ce.0"
 
 
 class StorageBoxConfig(BaseModel):

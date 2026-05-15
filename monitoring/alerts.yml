@@ -1,0 +1,171 @@
+# Prometheus alert rules for the ACME GitLab infrastructure.
+#
+# Load by referencing this file from prometheus.yml:
+#     rule_files:
+#       - /etc/prometheus/alerts.yml
+#
+# Metrics emitted by cron scripts via the node_exporter textfile collector are
+# documented inline below. See docs/DESIGN.md §7 for the full monitoring story.
+
+groups:
+  - name: gitlab-availability
+    interval: 30s
+    rules:
+      - alert: GitLabDown
+        expr: probe_success{job="gitlab-health"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "GitLab /-/health is failing"
+          description: "blackbox_exporter has been unable to probe GitLab /-/health for 2 minutes."
+          runbook: "docs/RUNBOOK-RECOVERY.md"
+
+      - alert: SSLExpiringSoon
+        expr: probe_ssl_earliest_cert_expiry - time() < 30 * 24 * 3600
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "TLS certificate for {{ $labels.instance }} expires in < 30 days"
+
+      - alert: SSLExpiringCritical
+        expr: probe_ssl_earliest_cert_expiry - time() < 7 * 24 * 3600
+        for: 1h
+        labels:
+          severity: critical
+        annotations:
+          summary: "TLS certificate for {{ $labels.instance }} expires in < 7 days"
+
+  - name: gitlab-host
+    interval: 1m
+    rules:
+      - alert: DiskSpaceLow
+        expr: |
+          node_filesystem_avail_bytes{mountpoint="/var/opt/gitlab"}
+          / node_filesystem_size_bytes{mountpoint="/var/opt/gitlab"} < 0.20
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "GitLab data volume < 20% free"
+
+      - alert: DiskSpaceCritical
+        expr: |
+          node_filesystem_avail_bytes{mountpoint="/var/opt/gitlab"}
+          / node_filesystem_size_bytes{mountpoint="/var/opt/gitlab"} < 0.10
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "GitLab data volume < 10% free"
+
+      - alert: MemoryHigh
+        expr: |
+          (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) > 0.80
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Memory utilisation > 80% on {{ $labels.instance }}"
+
+      - alert: MemoryCritical
+        expr: |
+          (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) > 0.95
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Memory utilisation > 95% on {{ $labels.instance }}"
+
+      - alert: CPUSustainedHigh
+        expr: |
+          (1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[15m]))) > 0.70
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "CPU load > 70% sustained for 15m on {{ $labels.instance }}"
+
+      - alert: CPUCritical
+        expr: |
+          (1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m]))) > 0.90
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "CPU load > 90% sustained for 5m on {{ $labels.instance }}"
+
+  - name: gitlab-backups
+    interval: 1m
+    rules:
+      # gitlab_backup_last_success_timestamp is emitted by the hourly backup
+      # cron via the node_exporter textfile collector. See
+      # terraform/templates/gitlab-cloud-init.yaml.
+      - alert: BackupOverdueWarn
+        expr: time() - gitlab_backup_last_success_timestamp > 2 * 3600
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Most recent successful Borg backup is > 2 hours old"
+
+      - alert: BackupOverdueCritical
+        expr: time() - gitlab_backup_last_success_timestamp > 4 * 3600
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Most recent successful Borg backup is > 4 hours old (RPO breach)"
+          runbook: "Check /var/log/gitlab-backup.log and Storage Box reachability."
+
+      # gitlab_backup_integrity is set to 1 by the weekly `borg check` cron
+      # (0 on failure). If the metric is absent for > 8 days, the cron itself
+      # has stopped running.
+      - alert: BorgIntegrityFail
+        expr: gitlab_backup_integrity == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Weekly `borg check` reported repository corruption"
+          runbook: "Verify the immutable S3 copy is intact before any restore attempt."
+
+      - alert: BorgCheckStale
+        expr: absent_over_time(gitlab_backup_integrity[8d])
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Weekly `borg check` has not run in over 8 days"
+
+      # gitlab_restore_test_success is emitted by the weekly restore-test cron.
+      - alert: RestoreTestFail
+        expr: gitlab_restore_test_success == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Weekly automated restore test FAILED"
+          runbook: "Backups are in question. See docs/RUNBOOK-RECOVERY.md and investigate before next restore-test cycle."
+
+      - alert: RestoreTestStale
+        expr: absent_over_time(gitlab_restore_test_success[8d])
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Weekly restore-test has not run in over 8 days"
+
+  - name: dead-mans-switch
+    interval: 1m
+    rules:
+      # This alert is INTENDED to fire constantly. An external observer
+      # (see docs/DESIGN.md §7.5) watches for its absence and alerts when
+      # Alertmanager itself stops dispatching. Do NOT silence or remove it.
+      - alert: Watchdog
+        expr: vector(1)
+        labels:
+          severity: none
+        annotations:
+          summary: "Watchdog — fires constantly. External observer alerts on absence."

@@ -41,9 +41,11 @@ runcmd:
     echo "$BACKUP_DEVICE /var/opt/gitlab/backups ext4 defaults,nofail 0 2" >> /etc/fstab
     mount /var/opt/gitlab/backups
 
-  # Install GitLab CE
+  # Install GitLab CE (version pinned via seed.yaml -> gitlab_version)
   - curl https://packages.gitlab.com/install/repositories/gitlab/gitlab-ce/script.deb.sh | bash
-  - EXTERNAL_URL="https://${gitlab_domain}" apt-get install -y gitlab-ce
+  - EXTERNAL_URL="https://${gitlab_domain}" apt-get install -y "gitlab-ce=${gitlab_version}"
+  # Hold the package so unattended-upgrades does not roll us forward silently
+  - apt-mark hold gitlab-ce
 
   # Enable and configure fail2ban
   - systemctl enable fail2ban
@@ -98,8 +100,13 @@ write_files:
         /etc/gitlab/gitlab-secrets.json \
         >> "$$LOG_FILE" 2>&1
 
-      # Prune old backups (keep hourly for 24h, daily for 7d, weekly for 4w, monthly for 6m)
-      borg prune --keep-hourly=24 --keep-daily=7 --keep-weekly=4 --keep-monthly=6 \
+      # Prune old backups using retention from /etc/gitlab-backup.conf
+      # (generated from seed.yaml via `seed_bootstrap.py --target borg-conf`)
+      borg prune \
+        --keep-hourly="$${BACKUP_KEEP_HOURLY:-24}" \
+        --keep-daily="$${BACKUP_KEEP_DAILY:-7}" \
+        --keep-weekly="$${BACKUP_KEEP_WEEKLY:-4}" \
+        --keep-monthly="$${BACKUP_KEEP_MONTHLY:-12}" \
         "$$BORG_REPO" >> "$$LOG_FILE" 2>&1
 
       # Clean local backups older than 24 hours

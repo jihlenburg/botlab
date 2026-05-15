@@ -31,6 +31,15 @@ domain      = "gitlab.yourcompany.com"
 admin_email = "admin@yourcompany.com"
 
 # =============================================================================
+# Required: GitLab CE Version
+# =============================================================================
+# Pin to a specific apt package version. Browse versions at:
+#   https://packages.gitlab.com/gitlab/gitlab-ce
+# Update deliberately after reading release notes; see docs/DESIGN.md §5.6.
+
+gitlab_version = "17.10.0-ce.0"
+
+# =============================================================================
 # Required: SSH Access Configuration
 # =============================================================================
 # SSH public keys for admin access to servers

@@ -63,6 +63,11 @@ infrastructure:
 gitlab:
   domain: "SECRET:gitlab-domain"               # e.g. gitlab.yourcompany.com
   private_token: "SECRET:gitlab-private-token"  # glpat-xxx (api + read_repository scope)
+  # Pin to a specific GitLab CE version. Format is the apt package version
+  # (omnibus); see https://packages.gitlab.com/gitlab/gitlab-ce for the list.
+  # Update deliberately after reading release notes and running the upgrade
+  # runbook in docs/DESIGN.md §5.6.
+  version: "17.10.0-ce.0"
 
 # =============================================================================
 # Backup (BorgBackup + Hetzner Storage Box)

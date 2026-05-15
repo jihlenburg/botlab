@@ -36,6 +36,12 @@ variable "admin_email" {
   default     = "admin@example.com"
 }
 
+variable "gitlab_version" {
+  description = "Pinned GitLab CE apt package version (e.g. 17.10.0-ce.0). See docs/DESIGN.md §5.6 for the upgrade runbook."
+  type        = string
+  default     = "17.10.0-ce.0"
+}
+
 # =============================================================================
 # Server Configuration
 # =============================================================================

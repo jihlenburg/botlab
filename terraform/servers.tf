@@ -23,6 +23,7 @@ resource "hcloud_server" "gitlab_primary" {
   user_data = templatefile("${path.module}/templates/gitlab-cloud-init.yaml", {
     gitlab_domain    = var.domain
     admin_email      = var.admin_email
+    gitlab_version   = var.gitlab_version
     data_volume_id   = hcloud_volume.gitlab_data.id
     backup_volume_id = hcloud_volume.gitlab_backups.id
   })
