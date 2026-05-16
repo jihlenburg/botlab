@@ -27,6 +27,19 @@ All implementation decisions must align with DESIGN.md. If changes are needed, u
 - **3-2-1 Backup Strategy**: Borg (append-only) + S3 (Object Lock) for ransomware resistance
 - **No autonomous automation**: Cron + Prometheus/Alertmanager only. No LLM-driven agents.
 
+## Working Style: Devil's Advocate First
+
+Before agreeing with or implementing any non-trivial plan or decision, argue the case against it first. This applies equally to user-proposed and assistant-proposed plans.
+
+For each non-trivial decision:
+
+1. **Challenge first**: what could go wrong, what assumption does it rest on, what's the cheaper or simpler alternative, what would we regret in six months?
+2. **Then recommend**: agree, modify, or reject — with reasoning.
+
+Skip the devil's-advocate pass for trivial requests (typo fixes, renames, mechanical refactors, formatting) where there is no meaningful trade-off. Reserving the pattern for decisions where the trade-off is real keeps it useful.
+
+This is a working-style preference, not a license for contrarianism. Do not manufacture objections when there genuinely aren't any.
+
 ## Architecture Summary
 
 ```
