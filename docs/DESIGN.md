@@ -1,6 +1,6 @@
 # ACME Corp GitLab Infrastructure - Master Design Document
 
-**Version**: 2.4
+**Version**: 2.5
 **Last Updated**: 2026-05-15
 **Status**: Draft - Pending Approval
 
@@ -519,6 +519,31 @@ The metric this alert depends on is a GitLab-audit-log-to-Prometheus bridge that
 - **Operator turnover**: rotate immediately if the departing operator had ever held the offline kit.
 
 **What this account is NOT for**: routine administration. Day-to-day admin actions go through SSO so that the audit trail names the actual operator. The break-glass exists to *restore SSO*, not to bypass it.
+
+#### 5.3.4 Access Scoping (Who Can Use SSO)
+
+By default, an Entra Enterprise App accepts authentication from **any user in your tenant**. For a self-hosted GitLab holding source code and CI secrets, that's almost always too permissive. Apply this in layers:
+
+**Floor (must-do)**: Enterprise App → Properties → **Assignment required = Yes**. Without this, rejection of un-assigned users happens at GitLab after the SAML assertion is already issued. With it, rejection happens at Entra before SAML — cleaner audit, less attack surface.
+
+**Standard pattern**: assign a security group, not individual users. Create `gitlab-users` (and tiered groups like `gitlab-readonly` if you want different roles) in Entra and assign the group to the app. Onboarding becomes "add to group" — same flow as every other Entra-managed resource. Removing someone from the group revokes GitLab SSO access immediately.
+
+**Conditional Access (premium-tier)**: requires Entra ID P1 or P2 licensing — **NOT included in standard M365 Business Basic/Standard**; typically needs M365 Business Premium, E3/E5, or a standalone P1 license. If you have it, the single most valuable policy is **require MFA on this Enterprise App**: adds an Authenticator prompt independent of GitLab's own 2FA. Other useful policies: restrict to office/VPN IP ranges, require Intune-compliant device, block legacy auth.
+
+**GitLab-side defence in depth (optional, currently off)**: `gitlab_rails['omniauth_block_auto_created_users'] = true` makes auto-created SSO users land blocked; a GitLab admin must unblock. Belt-and-braces if someone is added to `gitlab-users` who shouldn't be. The cost is friction — every new developer waits on a manual approval. At ACME's scale (10-20 devs, low turnover) we leave it off and trust Entra group membership as the gate. Revisit if turnover patterns change.
+
+| Control | Cost | Recommendation at our scale |
+|---------|------|------------------------------|
+| Assignment Required toggle | Free | **Always on** |
+| `gitlab-users` security group | Free | **Always** — never assign individuals directly |
+| Conditional Access "require MFA on app" | Entra P1 (~6 EUR/user/mo if not bundled) | If licensing permits |
+| Conditional Access geo/IP/device policies | Entra P1 | Optional; depends on threat model |
+| `omniauth_block_auto_created_users` | Free | Off at this scale (friction > benefit) |
+| `omniauth_external_providers = ['saml']` | Free | Off; doesn't fit our "one team" usage pattern |
+
+**Sequencing risk**: if Assignment Required is enabled AND `gitlab-users` is empty, no one can SSO. Add yourself to the group BEFORE flipping the toggle, then verify your own SSO works before adding anyone else. The break-glass admin (§5.3.3) is reachable via the bypass URL regardless of Entra state, so this isn't a lockout risk — but it would be an embarrassing way to start a deploy.
+
+**Interaction with `omniauth_auto_link_saml_user = true` (§5.3.2)**: SAML responses are matched to existing GitLab accounts by email. This is why the break-glass account's email is required to NOT match any Entra identity (§5.3.3). For routine users in `gitlab-users`, auto-link is what makes "first SSO = account created in GitLab" work correctly.
 
 ### 5.4 Git LFS Configuration
 
@@ -1437,3 +1462,4 @@ Track "last rotated" dates either in `seed.yaml` as comments next to each value 
 | 2.2.1 | 2026-05-15 | Claude Code | **Correction**: v2.2 Appendix C.4 incorrectly assumed Hetzner Cloud Servers expose TPM/vTPM. They do not (per [Hetzner FAQ](https://docs.hetzner.com/de/cloud/servers/faq/)). C.4 rewritten around `systemd-creds` with the per-host-key fallback, with an explicit threat-properties table showing what this does and does not protect against. New C.4a documents the dedicated-hardware path for users who genuinely need TPM-grade sealing. SECURITY-ASSESSMENT.md §4.1 gained an explicit "Hetzner-side disk image exfiltration" row. SECURITY-REVIEW T1.1 Layer 2 status updated to reflect the host-key-only ceiling. |
 | 2.3 | 2026-05-15 | Claude Code | Closed Security Review T2.8 — break-glass local admin account. New §5.3.3 documents the account model (non-obvious username, email outside Entra tenant, 32-char password + TOTP with offline backup codes, single-purpose use). DEPLOY.md §5 split into 5a-5d to enforce correct ordering: create break-glass BEFORE enabling `omniauth_auto_sign_in_with_provider` to avoid the chicken-and-egg lockout. New RUNBOOK-RECOVERY.md Appendix D covers SSO failure recovery end-to-end (bypass URL, TOTP backup codes, `gitlab-rake` last-resort reset, common SAML failure modes). New `BreakGlassLoginUsed` alert rule committed. Sub-finding T2.8a opened: alert depends on a not-yet-wired GitLab audit-log → Prometheus bridge. |
 | 2.4 | 2026-05-15 | Claude Code | Fleshed out break-glass from "designed" to "scripted, verified, operator-proof". New `scripts/setup-break-glass.sh` provisions the account (with server-side TOTP) via `gitlab-rails runner`, eliminating the UI click-through. New `scripts/verify-break-glass.sh` performs quarterly verification: confirms account state (exists, admin, confirmed, 2FA, not blocked), confirms the bypass URL serves the local-auth form, and emits Prometheus textfile metrics. Three new Alertmanager rules: `BreakGlassAccountMissing`, `BreakGlassKitVerificationStale` (100d), `BreakGlassKitVerificationCritical` (180d), plus `BreakGlassVerifyScriptNotRunning`. New `docs/OFFLINE-KIT-TEMPLATE.md` centralises the kit's contents and rotation cadence in one copyable template. RUNBOOK Appendix D extended: §D.6 (account doesn't exist at all), §D.7 (TOTP secret rotation), §D.8 (manual audit-log query). RUNBOOK §7 gained a post-recovery line clarifying that the break-glass account survives a normal restore. |
+| 2.5 | 2026-05-15 | Claude Code | New §5.3.4 "Access Scoping (Who Can Use SSO)" documents the layered controls — Assignment Required (must-do), `gitlab-users` security group (recommended pattern), Conditional Access (premium tier with explicit licensing caveat — NOT in M365 Business Basic/Standard), `omniauth_block_auto_created_users` (defence-in-depth, recommended off at our scale due to friction). Decision table per control + costs + scale-appropriate recommendation. DEPLOY.md §5a expanded with the specific Entra admin-centre clicks: create Enterprise App, create `gitlab-users` group with self added first (sequencing safety), flip Assignment Required, assign group, optional Conditional Access policy for MFA, verification that a non-assigned user is rejected at Entra. |

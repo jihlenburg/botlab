@@ -157,12 +157,47 @@ Set the initial root password via the web UI on first visit (GitLab generates on
 
 **Order matters.** The break-glass admin account MUST be created BEFORE enabling `omniauth_auto_sign_in_with_provider`. Otherwise you'll create a chicken-and-egg: SSO is broken, no local admin exists, no way in. The steps below are in the correct order.
 
-### 5a. Configure Azure AD (15 min)
+### 5a. Configure Azure AD (20 min)
 
-- [ ] Create an Enterprise Application "GitLab ACME Corp"
-- [ ] Set the Identifier, Reply URL, Sign-on URL to your `<domain>`
-- [ ] Add the GitLab user group(s) as assigned users — do NOT leave it open to "all users in tenant" unless that's actually intended
-- [ ] Note the IdP cert and SSO target URL for §5c
+See DESIGN.md §5.3.4 for the access-scoping model. The clicks below implement the recommended floor: Assignment Required + a security group, no individual assignments.
+
+**Create the Enterprise App:**
+
+- [ ] **Entra admin centre → Enterprise applications → New application → Create your own application** → name `GitLab ACME Corp`, type "Integrate any other application you don't find in the gallery"
+- [ ] **Single sign-on → SAML** → Edit "Basic SAML Configuration":
+  - **Identifier (Entity ID)**: `https://<domain>`
+  - **Reply URL**: `https://<domain>/users/auth/saml/callback`
+  - **Sign-on URL**: `https://<domain>/users/sign_in`
+- [ ] Edit "Attributes & Claims" → confirm `email`, `name`, `givenname`, `surname` claims are present (defaults usually suffice)
+- [ ] **Save** the IdP signing certificate (download Base64) and the Login URL → both go into `gitlab.rb` in §5c
+
+**Lock down access (Assignment Required + group):**
+
+- [ ] **Microsoft Entra admin centre → Groups → New group**:
+  - Group type: **Security**
+  - Group name: `gitlab-users`
+  - Membership type: **Assigned** (not Dynamic — keeps the membership audit trail simple)
+  - **Add YOURSELF as the first member NOW** (do this before the next step or you'll lock yourself out of testing SSO)
+- [ ] **Enterprise applications → GitLab ACME Corp → Properties → Assignment required? → Yes → Save**
+- [ ] **Enterprise applications → GitLab ACME Corp → Users and groups → Add user/group → assign `gitlab-users` group** (do NOT add individual users)
+- [ ] (Optional, tiered access) Repeat for `gitlab-readonly`, `gitlab-admins`, etc. GitLab itself decides what each user can do once they're in — SAML group claims can drive auto-assignment to GitLab groups but that's a v2 enhancement; for now just gate access at the Entra layer.
+
+**Conditional Access (skip if you don't have Entra ID P1+):**
+
+- [ ] **Verify your licensing**: Microsoft 365 admin centre → Billing → Licenses. Conditional Access requires Entra ID P1 (or P2). Bundled with M365 Business Premium, E3, E5; NOT in Business Basic/Standard.
+- [ ] If licensed: **Entra admin centre → Protection → Conditional Access → Create new policy**:
+  - Name: `MFA for GitLab ACME Corp`
+  - Users: include `gitlab-users` group
+  - Cloud apps: include the `GitLab ACME Corp` Enterprise App
+  - Grant: **Require multi-factor authentication**
+  - Enable policy: On
+- [ ] Test by signing in to GitLab — you should be prompted for MFA even if your account already has it for other Microsoft services. The point is that GitLab specifically requires it.
+
+**Final verification:**
+
+- [ ] You (in `gitlab-users`) can complete SAML to a sandbox URL. Use a SAML tester or wait until §5c to test against GitLab.
+- [ ] A second test user NOT in `gitlab-users` gets blocked at Entra with "AADSTS50105 — user not assigned" (try in incognito). If they DON'T get blocked, Assignment Required isn't actually on — recheck the toggle.
+- [ ] Note the IdP cert and Login URL for §5c.
 
 ### 5b. Create the break-glass local admin (10 min)
 
