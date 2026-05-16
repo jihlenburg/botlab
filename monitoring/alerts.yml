@@ -99,9 +99,14 @@ groups:
   - name: gitlab-backups
     interval: 1m
     rules:
-      # gitlab_backup_last_success_timestamp is emitted by the hourly backup
-      # cron via the node_exporter textfile collector. See
-      # terraform/templates/gitlab-cloud-init.yaml.
+      # gitlab_backup_last_success_timestamp must be emitted by the hourly
+      # backup script via the node_exporter textfile collector.
+      # Phase 4 prerequisite: the hourly backup script (currently in
+      # terraform/templates/gitlab-cloud-init.yaml as
+      # /usr/local/bin/gitlab-backup-to-borg.sh) must be augmented to
+      # write this metric, AND the node_exporter textfile collector
+      # must be enabled with --collector.textfile.directory set.
+      # See DEPLOY.md §7 for the Phase 4 monitoring rollout.
       - alert: BackupOverdueWarn
         expr: time() - gitlab_backup_last_success_timestamp > 2 * 3600
         for: 5m
@@ -120,8 +125,12 @@ groups:
           runbook: "Check /var/log/gitlab-backup.log and Storage Box reachability."
 
       # gitlab_backup_integrity is set to 1 by the weekly `borg check` cron
-      # (0 on failure). If the metric is absent for > 8 days, the cron itself
-      # has stopped running.
+      # (0 on failure). Emitted by scripts/borg-check.sh via the
+      # node_exporter textfile collector. If the metric is absent for > 8
+      # days, the cron itself has stopped running.
+      # Phase 4 prerequisite: scripts/borg-check.sh must be scheduled via
+      # the systemd unit at systemd/gitlab-borg-check.{service,timer} AND
+      # the node_exporter textfile collector must be enabled.
       - alert: BorgIntegrityFail
         expr: gitlab_backup_integrity == 0
         for: 5m
@@ -139,7 +148,11 @@ groups:
         annotations:
           summary: "Weekly `borg check` has not run in over 8 days"
 
-      # gitlab_restore_test_success is emitted by the weekly restore-test cron.
+      # gitlab_restore_test_success is emitted by scripts/restore-test.sh
+      # via the node_exporter textfile collector. Phase 4 prerequisite:
+      # scripts/restore-test.sh scheduled via
+      # systemd/gitlab-restore-test.{service,timer} AND the
+      # node_exporter textfile collector enabled.
       - alert: RestoreTestFail
         expr: gitlab_restore_test_success == 0
         for: 5m

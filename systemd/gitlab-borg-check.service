@@ -1,0 +1,19 @@
+[Unit]
+Description=Weekly Borg repository integrity check
+Documentation=file:///opt/botlab/scripts/borg-check.sh
+Documentation=file:///opt/botlab/docs/DESIGN.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+LoadCredentialEncrypted=borg_passphrase
+ExecStart=/opt/botlab/scripts/borg-check.sh
+# If borg-check exits non-zero (integrity FAIL), the metric file already
+# reflects the failure and Alertmanager will fire BorgIntegrityFail. No
+# OnFailure= chain needed.
+Nice=10
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=multi-user.target

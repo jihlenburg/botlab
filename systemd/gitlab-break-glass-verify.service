@@ -1,0 +1,14 @@
+[Unit]
+Description=Monthly verification of GitLab break-glass admin account
+Documentation=file:///opt/botlab/scripts/verify-break-glass.sh
+Documentation=file:///opt/botlab/docs/DESIGN.md
+
+[Service]
+Type=oneshot
+# The break-glass username is non-secret — it's recorded in the offline
+# kit. Edit this line at deploy time to match what setup-break-glass.sh
+# generated.
+ExecStart=/opt/botlab/scripts/verify-break-glass.sh recovery-CHANGEME
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,19 @@
+[Unit]
+Description=Weekly automated GitLab restore test (provisions ephemeral CX21)
+Documentation=file:///opt/botlab/scripts/restore-test.sh
+Documentation=file:///opt/botlab/docs/DESIGN.md
+After=network-online.target gitlab-runsvdir.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+LoadCredentialEncrypted=borg_passphrase
+ExecStart=/opt/botlab/scripts/restore-test.sh
+# The script's own trap destroys the ephemeral VM on any exit, including
+# SIGKILL. Belt-and-braces: a TimeoutSec catches the case where the script
+# itself hangs (e.g. ssh wait loop pathology) and prevents cost runaway.
+TimeoutStartSec=2h
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

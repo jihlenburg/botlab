@@ -174,6 +174,29 @@ class SeedConfig(BaseModel):
                 f"backup.borg.passphrase must be >= 20 characters (got {len(pp)})"
             )
 
+        # T2.1 from SECURITY-REVIEW-2026-05-15: refuse Hetzner endpoints for
+        # the S3 immutable tier. The whole point of that tier is to live
+        # outside the Hetzner account in case of account-level compromise
+        # or lockout. Using Hetzner Object Storage as the "immutable" tier
+        # defeats it.
+        s3 = self.backup.s3
+        if s3.enabled and not _has_placeholder(s3.endpoint):
+            endpoint_lc = s3.endpoint.lower()
+            if (
+                "hetzner" in endpoint_lc
+                or "your-objectstorage.com" in endpoint_lc  # Hetzner OS hostname
+                or "fsn1." in endpoint_lc
+                or "nbg1." in endpoint_lc
+                or "hel1." in endpoint_lc
+            ):
+                errors.append(
+                    f"backup.s3.endpoint '{s3.endpoint}' looks like Hetzner "
+                    "Object Storage. The S3 immutable tier MUST live on a "
+                    "different provider (Wasabi, Backblaze B2, AWS S3, etc.) "
+                    "to survive Hetzner account-level incidents. "
+                    "See docs/DESIGN.md §9.3 and SECURITY-REVIEW-2026-05-15.md T2.1."
+                )
+
         # Placeholder detection — refuse if any SECRET: values remain
         placeholders = _collect_placeholders(self)
         if placeholders:

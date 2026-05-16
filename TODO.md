@@ -87,9 +87,9 @@
 - [ ] Move S3 immutable copy to a non-Hetzner provider (Wasabi/B2/AWS) to decouple from Hetzner account lockout risk
 - [ ] Create offline backup recovery kit (Borg admin key, Terraform state snapshot, gitlab-secrets.json)
 - [ ] Configure fail2ban on the GitLab server (currently set up in cloud-init — verify in prod)
-- [~] **Layered secrets management** (per DESIGN.md Appendix C v2.2):
+- [ ] **Layered secrets management** (per DESIGN.md Appendix C; one sub-item done, three pending):
   - [x] Layer 1 — eliminated unused `gitlab.private_token` from seed; documented laptop-only invariants in DEPLOY.md §2a; `setup-borg-append-only.sh` now securely shreds full-access SSH keys with operator confirmation
-  - [ ] Layer 2 — `systemd-creds` (TPM2-sealed where available) for Borg passphrase + S3 keys; migrate cron entries to systemd timers
+  - [ ] Layer 2 — `systemd-creds` with host-key fallback (Hetzner Cloud doesn't expose TPM; see DESIGN.md Appendix C.4) for Borg passphrase + S3 keys; cron migrated to systemd timers (unit files in `systemd/` — install in Phase 4)
   - [ ] Layer 3 — GitLab runtime secrets (SMTP, SAML) moved to `File.read` from tmpfs populated at boot from systemd-creds
   - [ ] Layer 4 — see T1.4–T1.6, T2.3, T2.7, T2.8 (preventing root compromise is the real defence)
 - [x] Pin GitLab CE version and document the upgrade runbook — `seed.gitlab.version`, threaded through Terraform, `apt-mark hold` in cloud-init; runbook in DESIGN.md §5.6
@@ -103,22 +103,32 @@ See `docs/SECURITY-REVIEW-2026-05-15.md` for full context. Items grouped by tier
 - [ ] **T1.2** Configure remote Terraform state backend (Hetzner Object Storage, encrypted); also snapshot state into offline recovery kit
 - [ ] **T1.3** Define recovery-workstation profile in `docs/RUNBOOK-RECOVERY.md` (dedicated machine OR live-USB, FDE, network isolation when not recovering)
 - [ ] **T1.4** Make `trusted_ssh_ips` a required Terraform variable with no default (fail-loud instead of silent open-SSH)
-- [ ] **T1.5** Document monitoring stack exposure & auth model in DESIGN.md §7 (bind to 127.0.0.1, SSH port-forward access; Grafana admin pwd from seed; Alertmanager API auth; external observer webhook auth)
+- [x] **T1.5** Monitoring stack exposure & auth model — partial: DEPLOY.md §7 now says "bind to 127.0.0.1" and "SSH port-forward only" explicitly; external observer webhook auth via shared secret documented in `external-observer/`. Pending: actually applying the binding in the install commands (operator's job in Phase 4).
 - [ ] **T1.6** Vendor the GitLab repo install script (`scripts/install-gitlab-repo.sh`) with CI checksum verification; have cloud-init run the vendored copy instead of `curl ... | bash`
 
 **T2 — should fix:**
 
+- [x] **T2.1** Seed validator now refuses Hetzner endpoints when `backup.s3.enabled: true` — `scripts/seed_schema.py` `_validate_constraints` rejects `hetzner`/`your-objectstorage.com`/`fsn1.`/`nbg1.`/`hel1.` in `backup.s3.endpoint`.
 - [ ] **T2.2** Document GitLab CVE monitoring/patching cadence in DESIGN.md §5.6 (subscribe to GitLab security advisories; patch criticals within published window)
 - [ ] **T2.3** Add `sshd` fail2ban jail to cloud-init
 - [ ] **T2.4** TLS hardening in `gitlab.rb`: Mozilla Intermediate ciphers, OCSP stapling, document HSTS preload submission in DEPLOY.md
 - [ ] **T2.5** Confirm/configure LB sticky-session cookie flags (`Secure; HttpOnly; SameSite=Lax`)
-- [ ] **T2.6** Credential rotation matrix in DESIGN.md Appendix C (hcloud_token, GitLab PAT, SAML cert, SMTP password, SSH host keys, operator SSH keys)
+- [x] **T2.6** Credential rotation matrix added to DESIGN.md Appendix C.8 (v2.2).
 - [ ] **T2.7** AIDE file-integrity monitoring in cloud-init; nightly cron + Prometheus textfile metric; re-baseline as part of upgrade runbook
 - [x] **T2.8** Break-glass local admin account — design, scripts, verification, alerts, kit template all committed. Files: `scripts/setup-break-glass.sh`, `scripts/verify-break-glass.sh`, `docs/OFFLINE-KIT-TEMPLATE.md`, DESIGN.md §5.3.3, DEPLOY.md §5b, RUNBOOK-RECOVERY.md Appendix D (§D.1-D.8), `monitoring/alerts.yml` (`BreakGlass*` rule group). Implementation in production pending first deploy.
   - [ ] **T2.8a** Wire GitLab audit log → Prometheus textfile collector so `gitlab_break_glass_login_total` metric exists (the `BreakGlassLoginUsed` alert depends on it; alert rule is committed but the metric source isn't yet). Until then, RUNBOOK Appendix D §D.8 documents the manual `gitlab-rails` query.
-  - [ ] **T2.8b** Schedule `scripts/verify-break-glass.sh` as a monthly systemd timer (or weekly during initial bedding-in). Service+timer unit files to be authored alongside the monitoring-stack rollout in Phase 4.
+  - [x] **T2.8b** Systemd timer for `scripts/verify-break-glass.sh` — units at `systemd/gitlab-break-glass-verify.{service,timer}` (monthly). Operator must edit the service file at deploy time to set the actual break-glass username.
 
-**T3 — hardening polish backlog** (work after T1/T2 closed): commit signing decision, SBOM/signature spot-checks, LFS pre-signed URL TTL, log retention policy, annual security tabletop exercise, `SECURITY.md` responsible-disclosure path, verify gitleaks runs in CI not just pre-commit.
+**T3 — hardening polish:**
+- [x] **T3.6** `SECURITY.md` responsible-disclosure path added at repo root.
+- [x] **T3.7** Gitleaks now runs in CI (`.github/workflows/test.yml`) — was previously pre-commit-only, which is bypassable with `--no-verify`.
+- [ ] **T3.x** Backlog: commit signing decision, SBOM/signature spot-checks, LFS pre-signed URL TTL, log retention policy, annual security tabletop exercise.
+
+**New TODOs from v2.6 refactor:**
+
+- [ ] **T4.1** Add a `--verify-data` `borg check` cadence (annually?) — separate timer; current weekly check is `--repository-only` for speed. See `scripts/borg-check.sh` header comment.
+- [ ] **T4.2** Migrate the hourly backup from cron (`/etc/cron.d/gitlab-backup` baked into cloud-init) to the systemd timer `gitlab-backup.timer` once Layer 2 systemd-creds is in place. Keep the cron during the transition; remove only after the timer has run successfully through a full daily cycle.
+- [ ] **T4.3** External observer alerting destination: choose a notification channel that is independent of the operator's Microsoft account (per `external-observer/README.md`). The observer should never depend on the same identity it's trying to protect.
 
 ### Phase 6: Future Enhancements (Priority: LOW)
 

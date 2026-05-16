@@ -1,6 +1,6 @@
 # ACME Corp GitLab Infrastructure - Master Design Document
 
-**Version**: 2.5
+**Version**: 2.6
 **Last Updated**: 2026-05-15
 **Status**: Draft - Pending Approval
 
@@ -23,13 +23,22 @@
 3. [Architecture Overview](#3-architecture-overview)
 4. [Infrastructure Design](#4-infrastructure-design)
 5. [GitLab Configuration](#5-gitlab-configuration)
+   - 5.1 Installation • 5.2 Core Configuration
+   - 5.3 Azure AD SSO — 5.3.1 Azure AD config • 5.3.2 GitLab SAML config • 5.3.3 Break-glass admin • 5.3.4 Access scoping
+   - 5.4 Git LFS • 5.6 Version pinning & upgrade runbook
 6. [Disaster Recovery Design](#6-disaster-recovery-design)
+   - 6.1 Philosophy • 6.2 Objectives • 6.3 Backup strategy • 6.4 Recovery procedure (see RUNBOOK-RECOVERY.md) • 6.5 Backup verification
 7. [Monitoring & Alerting](#7-monitoring--alerting)
+   - 7.1 Metrics stack • 7.2 Coverage • 7.3 Scheduled maintenance
+   - 7.4 Alerting • 7.5 External observer (dead-man's-switch)
 8. [Security Architecture](#8-security-architecture)
 9. [Ransomware Protection](#9-ransomware-protection)
 10. [Implementation Plan](#10-implementation-plan)
 11. [Verification & Testing](#11-verification--testing)
 12. [Operational Procedures](#12-operational-procedures)
+- Appendix A: Config files • Appendix B: Useful commands
+- Appendix C: Layered secrets management (sops + age, systemd-creds + Hetzner Cloud's no-TPM ceiling)
+- Appendix D: Contact information
 
 ---
 
@@ -54,7 +63,7 @@ This document defines the complete technical architecture for ACME Corp' GitLab 
 |------------|-------------|
 | **Open Source Only** | No commercial software licenses |
 | **Data Protection** | Hourly backups, encrypted offsite storage |
-| **Budget** | ~70 EUR/month infrastructure |
+| **Budget** | ~63 EUR/month infrastructure |
 | **Scale** | 10-20 developers initially |
 
 ### 1.4 Key Decisions
@@ -1463,3 +1472,4 @@ Track "last rotated" dates either in `seed.yaml` as comments next to each value 
 | 2.3 | 2026-05-15 | Claude Code | Closed Security Review T2.8 — break-glass local admin account. New §5.3.3 documents the account model (non-obvious username, email outside Entra tenant, 32-char password + TOTP with offline backup codes, single-purpose use). DEPLOY.md §5 split into 5a-5d to enforce correct ordering: create break-glass BEFORE enabling `omniauth_auto_sign_in_with_provider` to avoid the chicken-and-egg lockout. New RUNBOOK-RECOVERY.md Appendix D covers SSO failure recovery end-to-end (bypass URL, TOTP backup codes, `gitlab-rake` last-resort reset, common SAML failure modes). New `BreakGlassLoginUsed` alert rule committed. Sub-finding T2.8a opened: alert depends on a not-yet-wired GitLab audit-log → Prometheus bridge. |
 | 2.4 | 2026-05-15 | Claude Code | Fleshed out break-glass from "designed" to "scripted, verified, operator-proof". New `scripts/setup-break-glass.sh` provisions the account (with server-side TOTP) via `gitlab-rails runner`, eliminating the UI click-through. New `scripts/verify-break-glass.sh` performs quarterly verification: confirms account state (exists, admin, confirmed, 2FA, not blocked), confirms the bypass URL serves the local-auth form, and emits Prometheus textfile metrics. Three new Alertmanager rules: `BreakGlassAccountMissing`, `BreakGlassKitVerificationStale` (100d), `BreakGlassKitVerificationCritical` (180d), plus `BreakGlassVerifyScriptNotRunning`. New `docs/OFFLINE-KIT-TEMPLATE.md` centralises the kit's contents and rotation cadence in one copyable template. RUNBOOK Appendix D extended: §D.6 (account doesn't exist at all), §D.7 (TOTP secret rotation), §D.8 (manual audit-log query). RUNBOOK §7 gained a post-recovery line clarifying that the break-glass account survives a normal restore. |
 | 2.5 | 2026-05-15 | Claude Code | New §5.3.4 "Access Scoping (Who Can Use SSO)" documents the layered controls — Assignment Required (must-do), `gitlab-users` security group (recommended pattern), Conditional Access (premium tier with explicit licensing caveat — NOT in M365 Business Basic/Standard), `omniauth_block_auto_created_users` (defence-in-depth, recommended off at our scale due to friction). Decision table per control + costs + scale-appropriate recommendation. DEPLOY.md §5a expanded with the specific Entra admin-centre clicks: create Enterprise App, create `gitlab-users` group with self added first (sequencing safety), flip Assignment Required, assign group, optional Conditional Access policy for MFA, verification that a non-assigned user is rejected at Entra. |
+| 2.6 | 2026-05-15 | Claude Code | **Project-wide refactor.** Fixes per security-review sweep: corrected §1.3 cost (70 → 63 EUR), added "Phase 4 prerequisite" disclaimers to monitoring/alerts.yml entries whose metric sources don't yet exist, reframed README's monitoring section as target state rather than current state. New scripts close the implementation gap: `scripts/borg-check.sh` (weekly Borg integrity → `gitlab_backup_integrity` metric) and `scripts/restore-test.sh` (weekly ephemeral-CX21 restore drill with cost-safety trap → `gitlab_restore_test_success` metric). New `systemd/` directory with timer+service units for all scheduled jobs (hourly backup, weekly borg-check, weekly restore-test, monthly break-glass verify) reading credentials via `LoadCredentialEncrypted=`. New `external-observer/` directory with `setup-observer.sh` for provisioning the dead-man's-switch on a non-Hetzner VPS (blackbox_exporter + Watchdog webhook receiver + Caddy TLS). Security hygiene: new `SECURITY.md` (responsible disclosure), gitleaks added to CI (was pre-commit-only — bypassable), unused `tls`/`local` provider pins removed from `terraform/versions.tf`, T2.1 seed validator now refuses Hetzner endpoints for the S3 immutable tier. Doc consolidation: ToC expanded with subsections, DEPLOY.md §9 shortened to a pointer at `OFFLINE-KIT-TEMPLATE.md`, status terminology normalised in TODO.md, CLAUDE.md section anchors prefixed with `§`. Closed T1.5 (partial), T2.1, T2.6, T2.8b, T3.6, T3.7. New TODOs T4.1-T4.3 opened. |

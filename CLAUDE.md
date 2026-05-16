@@ -198,10 +198,10 @@ For Python utilities (seed bootstrap): the script should validate cleanly agains
 
 | Decision | Choice | Document Section |
 |----------|--------|------------------|
-| Backup Strategy | 3-2-1 with immutable tier | DESIGN.md 6.3.3, SECURITY-ASSESSMENT.md 3.3 |
-| Ransomware Protection | Append-only Borg + S3 WORM | DESIGN.md 9, SECURITY-ASSESSMENT.md 3 |
-| Automation | Cron + Prometheus + Alertmanager (deterministic) | DESIGN.md 7 |
-| DR Procedure | Operator-driven `scripts/restore-gitlab.sh` | DESIGN.md 6.4 |
+| Backup Strategy | 3-2-1 with immutable tier | DESIGN.md §6.3.3, SECURITY-ASSESSMENT.md §3.3 |
+| Ransomware Protection | Append-only Borg + S3 WORM | DESIGN.md §9, SECURITY-ASSESSMENT.md §3 |
+| Automation | Cron/systemd timers + Prometheus + Alertmanager (deterministic) | DESIGN.md §7 |
+| DR Procedure | Operator-driven `scripts/restore-gitlab.sh` | DESIGN.md §6.4 |
 
 ## Key Files
 

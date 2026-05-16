@@ -131,16 +131,20 @@ Restore is performed by an operator using `scripts/restore-gitlab.sh`. A weekly 
 
 See `docs/DESIGN.md` Section 6 and `docs/SECURITY-ASSESSMENT.md` for details.
 
-## Monitoring
+## Monitoring (Phase 4 — not yet deployed)
 
-Prometheus, Alertmanager, and Grafana run as systemd services on the GitLab server.
+**Target architecture** — installed by hand following `docs/DEPLOY.md` §7. Not provisioned by Terraform or cloud-init today.
 
+- Prometheus, Alertmanager, Grafana run as systemd services on the GitLab server
 - **Health checks**: blackbox_exporter probes `/-/health`
 - **Resource monitoring**: node_exporter (disk, CPU, memory)
-- **Backup signals**: cron jobs write to the textfile collector (backup age, `borg check` result, restore-test result)
-- **Alerting**: email + webhook via Alertmanager
+- **Backup signals**: `scripts/borg-check.sh` (weekly) and `scripts/restore-test.sh` (weekly) emit Prometheus textfile metrics via the node_exporter textfile collector
+- **Alerting**: email + webhook via Alertmanager; rules in `monitoring/alerts.yml`
+- **External observer**: ~5 EUR/mo non-Hetzner VPS probes the LB and the Watchdog alert (scaffolding in `external-observer/`)
 
-Grafana dashboards: `http://gitlab-server:3000` (internal network).
+Grafana dashboards (once installed): `http://gitlab-server:3000` via SSH port-forward only.
+
+**Current implementation state** lives in `TODO.md` — search for "T2.8" and Phase 4 to see what's wired and what isn't.
 
 ## Design History
 

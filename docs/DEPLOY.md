@@ -274,36 +274,61 @@ If you configured S3 in step 2, also run a manual weekly backup to verify the im
 
 ## 7. Stand up monitoring (1 hour)
 
-This is the biggest TODO right now — the cloud-init does **not** install Prometheus/Alertmanager/Grafana yet. You'll do it by hand following DESIGN.md §7 until the next iteration scripts it.
+The monitoring stack is NOT installed by Terraform / cloud-init today (tracked in TODO.md Phase 4). Do it by hand on the GitLab server following DESIGN.md §7:
 
 - [ ] `apt-get install prometheus prometheus-node-exporter prometheus-blackbox-exporter alertmanager grafana`
 - [ ] Drop `monitoring/alerts.yml` from this repo into `/etc/prometheus/alerts.yml`
-- [ ] Configure `prometheus.yml` to scrape `localhost:9100` (node), `localhost:9115` (blackbox probe of `/-/health`), `localhost:9168` (gitlab-exporter — install separately if you want GitLab-specific metrics), and load `/etc/prometheus/alerts.yml`
-- [ ] Configure `alertmanager.yml` with the SMTP creds from `seed.yaml` and a route for `severity: critical` → email + webhook
-- [ ] Enable the node_exporter textfile collector with `--collector.textfile.directory=/var/lib/node_exporter/textfile_collector` so the backup cron metrics get picked up
-- [ ] Provision the **external observer** (see DESIGN.md §7.5) — a ~5 EUR/mo non-Hetzner VPS that probes the LB and watches for the `Watchdog` alert. This is the dead-man's-switch.
-- [ ] Trigger a deliberate failure (stop the GitLab service) to confirm the alert fires end-to-end. Restart immediately after.
+- [ ] Configure `prometheus.yml` to scrape `localhost:9100` (node), `localhost:9115` (blackbox probe of `/-/health`), and `localhost:9168` (gitlab-exporter — install separately for GitLab-specific metrics). Load `/etc/prometheus/alerts.yml`.
+- [ ] Enable the node_exporter textfile collector with `--collector.textfile.directory=/var/lib/node_exporter/textfile_collector`. This is what makes the backup-script-emitted metrics (`gitlab_backup_integrity`, `gitlab_restore_test_success`, etc.) visible.
+- [ ] Configure `alertmanager.yml` with the SMTP creds from `seed.yaml` and a route for `severity: critical` → email + webhook. Add a separate route for the `Watchdog` alert → `https://<observer-domain>/watchdog?secret=<...>` (see §7a).
+- [ ] **Bind Prometheus, Alertmanager, and Grafana to `127.0.0.1` only.** Reach them via SSH port-forward; do NOT expose to the public internet (T1.5 from SECURITY-REVIEW-2026-05-15.md).
+- [ ] Trigger a deliberate failure (stop the GitLab service) to confirm the alerts fire end-to-end. Restart immediately after.
+
+### 7a. Provision the external observer (15 min)
+
+This is the dead-man's-switch (DESIGN.md §7.5). Without it, "the GitLab server is down" is not reliably alertable because the very thing that would alert you is also down.
+
+- [ ] Pick a host **outside** the GitLab server's failure domain. Recommended: ~5 EUR/mo non-Hetzner VPS (Vultr / Linode / OVH). Acceptable: Hetzner Cloud server in a different DC (cheaper; doesn't survive account-level Hetzner issues).
+- [ ] Assign a DNS name (Let's Encrypt needs it).
+- [ ] Copy `external-observer/setup-observer.sh` to the VPS as root and run it. It will prompt for the GitLab domain, the observer's own DNS name, an alerting destination, and a shared webhook secret.
+- [ ] On the GitLab server, configure Alertmanager to dispatch the `Watchdog` alert to the observer (the setup script prints the exact YAML snippet at the end).
+- [ ] Wait 10 minutes; confirm the observer's `WatchdogNeverSeen` alert clears.
+- [ ] Test failure: stop Alertmanager on the GitLab server for 11 minutes. The observer should fire `WatchdogStale`. Restart immediately.
+
+### 7b. Install the scheduled units (15 min)
+
+The scheduled jobs (hourly backup, weekly borg-check, weekly restore-test, monthly break-glass verify) run via systemd timers. Unit files are committed in `systemd/`.
+
+- [ ] Copy `systemd/*.{service,timer}` to `/etc/systemd/system/`.
+- [ ] Edit `gitlab-break-glass-verify.service` to replace `recovery-CHANGEME` with the actual break-glass username from your offline kit.
+- [ ] Set up Layer-2 credentials: `systemd-creds encrypt --with-key=host` for `borg_passphrase`, `s3_access_key`, `s3_secret_key` (commands in DESIGN.md Appendix C.4).
+- [ ] Ensure `/etc/hcloud-token` exists (mode 0600 root, containing a token scoped to "create/delete servers" for the restore-test). Ensure `/root/.ssh/restore_test_key` exists and its public half is registered in Hetzner Cloud as SSH key `restore-test-key`.
+- [ ] `systemctl daemon-reload && systemctl enable --now gitlab-backup.timer gitlab-borg-check.timer gitlab-restore-test.timer gitlab-break-glass-verify.timer`
+- [ ] Verify timers loaded: `systemctl list-timers gitlab-*`
+- [ ] If migrating from the cron-installed hourly backup: remove `/etc/cron.d/gitlab-backup` AFTER confirming `gitlab-backup.timer` is active. The cron and timer must not run concurrently.
 
 ---
 
-## 8. Schedule the weekly restore-test (15 min)
+## 8. Verify the restore test (10 min)
 
-This is the single most important thing in the entire deployment. Backups you haven't tested are aspirations, not insurance.
+The weekly restore test (`scripts/restore-test.sh`) is the **single most important automation in the deployment**. Run it once manually before declaring the deploy done:
 
-- [ ] Author a cron entry (or systemd timer) that runs weekly, provisions a CX21 via the Hetzner API, installs the same pinned GitLab version, restores the latest Borg archive, runs `gitlab-rake gitlab:check`, then destroys the test VM
-- [ ] Emit `gitlab_restore_test_success{} 1|0` to the textfile collector
-- [ ] Run it manually once to confirm the whole chain works
-- [ ] Confirm `monitoring/alerts.yml`'s `RestoreTestFail` alert would fire by manually setting the metric to `0`
+- [ ] `systemctl start gitlab-restore-test.service` (one-shot manual trigger)
+- [ ] Tail the log: `journalctl -u gitlab-restore-test -f` AND `tail -f /var/log/gitlab-restore-test.log`
+- [ ] Expected: ephemeral CX21 provisioned in Hetzner Cloud, GitLab installed at pinned version, latest Borg archive restored, `gitlab-rake gitlab:check` passes, server destroyed at the end. Total: 30-90 min.
+- [ ] Confirm the metric was written: `cat /var/lib/node_exporter/textfile_collector/gitlab_restore_test.prom`
+- [ ] Confirm in Hetzner Cloud console that NO `restore-test-*` server was left behind (the script's trap should have destroyed it on any exit)
+- [ ] Confirm `RestoreTestFail` would fire by manually setting the metric to 0 (`echo 'gitlab_restore_test_success 0' > /var/lib/node_exporter/textfile_collector/gitlab_restore_test.prom`), waiting for Alertmanager, restoring.
 
-If you skip this step, you have a fancy backup architecture and no actual disaster recovery capability.
+If this step is skipped, you have a fancy backup architecture and no actual disaster recovery capability.
 
 ---
 
 ## 9. Build the offline recovery kit (15 min)
 
-Copy [docs/OFFLINE-KIT-TEMPLATE.md](OFFLINE-KIT-TEMPLATE.md), fill in every placeholder, and put it (plus the binary attachments it references — `gitlab-secrets.json`, `terraform.tfstate`, operator SSH private keys, Borg full-access key) on an encrypted USB drive. Splitting between two locations (off-site + on-site safe) is recommended.
+The authoritative list of what belongs in the kit lives in [docs/OFFLINE-KIT-TEMPLATE.md](OFFLINE-KIT-TEMPLATE.md). Don't duplicate that list here — open the template, fill in every placeholder, attach the referenced files (`gitlab-secrets.json`, `terraform.tfstate`, operator SSH private keys, Borg full-access key), and store on FDE-encrypted media. Splitting between two physical locations (off-site + on-site safe) is recommended so loss of one doesn't lose the kit.
 
-The template enumerates everything that belongs in the kit; the section below is a shorter checklist for the deploy flow:
+**Deploy-flow checklist** — the minimum to do during first deploy. Refer back to the template for completeness:
 
 - [ ] `seed.yaml` (the source of truth; everything else can be regenerated from it)
 - [ ] Borg **full-access** passphrase (NOT the append-only key on the server)
