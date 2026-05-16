@@ -207,6 +207,7 @@ borg init --encryption=keyfile-blake2 $BORG_REPO
 | DNS provider failure | ⚠️ Partial | Can update, but if provider down... | Secondary DNS |
 | Azure AD outage (SSO) | ⚠️ Partial | Users cannot login | Ensure local admin account exists |
 | Object storage failure | ⚠️ Partial | LFS/artifacts unavailable | Objects not backed up; enable bucket versioning + cross-bucket replication |
+| **Hetzner-side disk image exfiltration** (e.g. provider-side incident, malicious/compromised support staff) | ⚠️ Partial | Layer 2 secrets (Borg passphrase, S3 keys) sealed via systemd-creds host-key fallback are decryptable because both the encrypted credential and the host key live on the same exfiltrated disk. `gitlab-secrets.json` likewise exposed. Borg archives themselves remain encrypted (repokey-blake2). | TPM-bound sealing would close this but is unavailable on Hetzner Cloud Servers (TPM/vTPM not supported per [Hetzner FAQ](https://docs.hetzner.com/de/cloud/servers/faq/)). Mitigated only by moving to dedicated hardware — see DESIGN.md Appendix C.4a. Accepted trade-off at this scale. |
 
 ### 4.2 Critical Edge Cases Requiring Attention
 

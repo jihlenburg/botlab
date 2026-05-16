@@ -1,6 +1,6 @@
 # ACME Corp GitLab Infrastructure - Master Design Document
 
-**Version**: 2.2
+**Version**: 2.2.1
 **Last Updated**: 2026-05-15
 **Status**: Draft - Pending Approval
 
@@ -1150,51 +1150,56 @@ This is the highest-leverage step and costs nothing in operational complexity.
 
 **Operator SSH private keys** belong on the operator's workstation only, ideally backed by a hardware token (YubiKey-resident SSH key with PIN + presence). Public halves are uploaded via `infrastructure.ssh.admin_keys.*` in `seed.yaml` — the server only ever sees the public side.
 
-### C.4 Layer 2 — `systemd-creds` with TPM2 binding for unavoidable server-side runtime secrets
+### C.4 Layer 2 — `systemd-creds` for unavoidable server-side runtime secrets
 
-For secrets that *must* be readable by something on the server (Borg passphrase, S3 keys), use [`systemd-creds`](https://www.freedesktop.org/software/systemd/man/systemd-creds.html). It encrypts a credential at rest and decrypts it only when loading into a specific service unit's `$CREDENTIALS_DIRECTORY`. With TPM2 binding (PCR-sealed), the encrypted credential is useless on a different machine or after the boot chain is tampered with.
+For secrets that *must* be readable by something on the server (Borg passphrase, S3 keys), use [`systemd-creds`](https://www.freedesktop.org/software/systemd/man/systemd-creds.html). It encrypts a credential at rest and decrypts it only when loading into a specific service unit's `$CREDENTIALS_DIRECTORY`. Credentials are not visible to other processes, not in environment variables, not in `/proc/PID/environ`.
 
-**Preflight**: confirm TPM2 is available on the Hetzner Cloud server:
+**Hetzner Cloud caveat — no TPM available.** Hetzner Cloud Servers do not expose TPM/vTPM ([Hetzner FAQ](https://docs.hetzner.com/de/cloud/servers/faq/)). systemd-creds therefore falls back to a per-host key at `/var/lib/systemd/credential.secret`. We accept this trade-off: it's a meaningfully diminished protection compared to TPM-sealing, but it still closes the most likely real-world leak vector (Borg archives or other backups escaping). See C.4a for the "if you ever care enough to move to dedicated hardware" path.
 
-```bash
-systemd-creds has-tpm2
-# Expect: yes
-# If "no", credentials still encrypt using a host-bound key in
-# /var/lib/systemd/credential.secret — weaker than TPM2 binding but still
-# better than plaintext (the key is not in any backup we take).
-```
+**What Layer 2 actually protects against on Hetzner Cloud:**
 
-**One-time encryption** (run on the GitLab server with operator privileges):
+| Threat | Without Layer 2 | With Layer 2 (host-key fallback) |
+|--------|-----------------|----------------------------------|
+| Borg backup leak — `/etc/gitlab/` extracted from a stolen archive | Secrets exposed | Encrypted credential is not in our Borg backups (the backup script only ships `gitlab.rb` + `gitlab-secrets.json`); host key not in any backup. **Secrets safe.** |
+| Operator accidentally `scp`s `/etc/gitlab-backup.conf` somewhere | Secrets exposed | The file no longer contains secrets — only structural config. **Safe.** |
+| Non-root filesystem read on the server | Both files are 0600 root — already protected | Same |
+| Hetzner-side disk image exfiltration (full disk handed to attacker) | Secrets exposed | Both encrypted credential and host key on the same disk → **secrets exposed** |
+| Root compromise on running server | Secrets exposed | Secrets exposed (Layer 4 is the only answer) |
+
+The first two rows are the realistic wins and the reason to bother. The fourth row is the residual risk Hetzner Cloud forces on us; closing it would require dedicated hardware (C.4a). The fifth row is the same as it always was: nothing in this appendix prevents root compromise — Layer 4 does.
+
+**Operational invariant for future maintainers**: do NOT add `/var/lib/systemd/credential.secret` or `/etc/credstore.encrypted/` to any backup script. The whole point of the host-key fallback is that the key lives only on the running host and not in the backup that contains the encrypted credentials.
+
+**One-time encryption** (run on the GitLab server as root):
 
 ```bash
 # Borg passphrase
-read -s -p "Borg passphrase: " BORG_PASS && echo
+read -rsp "Borg passphrase: " BORG_PASS && echo
 printf '%s' "$BORG_PASS" | sudo systemd-creds encrypt \
     --name=borg_passphrase \
-    --with-key=auto \
-    --tpm2-pcrs=7+11 \
+    --with-key=host \
     - /etc/credstore.encrypted/borg_passphrase
 unset BORG_PASS
 
 # S3 access key
-read -p "S3 access key: " S3_AK
+read -rp "S3 access key: " S3_AK
 printf '%s' "$S3_AK" | sudo systemd-creds encrypt \
-    --name=s3_access_key --with-key=auto --tpm2-pcrs=7+11 \
+    --name=s3_access_key --with-key=host \
     - /etc/credstore.encrypted/s3_access_key
 
 # S3 secret key
-read -s -p "S3 secret key: " S3_SK && echo
+read -rsp "S3 secret key: " S3_SK && echo
 printf '%s' "$S3_SK" | sudo systemd-creds encrypt \
-    --name=s3_secret_key --with-key=auto --tpm2-pcrs=7+11 \
+    --name=s3_secret_key --with-key=host \
     - /etc/credstore.encrypted/s3_secret_key
 unset S3_SK
 
 sudo chmod 600 /etc/credstore.encrypted/*
 ```
 
-PCRs 7 and 11 mean "Secure Boot state + initrd measurements" — the credential becomes unreadable if either changes (e.g. someone boots a recovery USB to read your disks).
+`--with-key=host` explicitly selects the host-key path. Omitting it lets systemd-creds choose (`auto`), which on a TPM-equipped host would use TPM. Pinning to `host` makes the code behave the same way regardless of the underlying hardware, which matters when you might later test the same scripts on a TPM-equipped machine.
 
-**Consuming the credential** — convert the cron into a systemd timer (this also ticks off TODO T2.3):
+**Consuming the credential** — convert the cron into a systemd timer (this also closes TODO T2.3):
 
 ```ini
 # /etc/systemd/system/gitlab-backup.service
@@ -1224,7 +1229,18 @@ WantedBy=timers.target
 
 The Borg passphrase exists in plaintext only inside the backup script's process memory while it runs (typically a few minutes per hour). No other process can read it; no on-disk plaintext copy exists.
 
-**`/etc/gitlab-backup.conf` becomes structural only** — repo URL, key path, retention numbers. No secret material. The `BORG_PASSPHRASE` line is removed; the script gets it from `$CREDENTIALS_DIRECTORY` instead.
+**`/etc/gitlab-backup.conf` becomes structural-only** — repo URL, key path, retention numbers. No secret material. The `BORG_PASSPHRASE` line is removed; the script gets it from `$CREDENTIALS_DIRECTORY` instead. `seed_bootstrap.py --target borg-conf` should be updated to stop emitting `BORG_PASSPHRASE` when Layer 2 is in effect.
+
+### C.4a — If you ever need TPM-grade sealing
+
+The disk-exfiltration row in the C.4 table is the residual risk Hetzner Cloud cannot close. If your threat model genuinely requires protection against Hetzner-side disk image leak, the only path is dedicated hardware:
+
+- **Hetzner Dedicated (Robot)** servers ship with physical TPM2. AX-class machines are ~47 EUR/mo and up, broadly competitive with the cloud setup once you add Storage Box and Object Storage — but the operational profile is very different: bare-metal install, hours-long provisioning, no `hcloud_load_balancer`, the Robot Terraform provider is more limited than the Cloud one. Migration is a non-trivial project, not a flag flip.
+- Other EU providers with TPM2 on bare metal (OVHcloud, Scaleway Elastic Metal, Leaseweb) are options if you'd rather diversify.
+
+The migration to TPM, once on appropriate hardware, is a one-shot re-encryption of each credential with `--with-key=auto --tpm2-pcrs=7+11`. The consuming service units (`LoadCredentialEncrypted=...`) don't change. So **Layer 2 today is forward-compatible with a future TPM-equipped host** — implementing it now is not throwaway work.
+
+For the ACME deployment as specified (~63 EUR/mo, 10-20 devs, EU residency, accepted Hetzner-vendor risk), the operational cost of dedicated hardware is disproportionate to the marginal security gain. We document this choice rather than make it silently.
 
 ### C.5 Layer 3 — GitLab's own runtime secrets (SMTP, SAML, `gitlab-secrets.json`)
 
@@ -1369,3 +1385,4 @@ Track "last rotated" dates either in `seed.yaml` as comments next to each value 
 | 2.0 | 2026-05-12 | Claude Code | Dropped the Admin Bot and the (planned) LLM-driven Integrator Bot. Monitoring/automation replaced by Prometheus + Alertmanager + cron on the GitLab server. Removed the dedicated admin-bot CX32 instance from infrastructure (~7 EUR/month savings). Removed Section 7.8 (per-repo bot policies). |
 | 2.1 | 2026-05-15 | Claude Code | Pinned GitLab version (new §5.6 upgrade runbook); added §7.5 external dead-man's-switch observer; reconciled backup retention numbers (12-month monthlies everywhere); fixed cloud-init backup script to honour `/etc/gitlab-backup.conf`. Extracted DR steps to `RUNBOOK-RECOVERY.md`; added first-deploy `DEPLOY.md`; added Appendix C (sops + age secrets management); shipped starter `monitoring/alerts.yml` including the `Watchdog` dead-man alert. |
 | 2.2 | 2026-05-15 | Claude Code | Rewrote Appendix C as **Layered Secrets Management** (Layer 1 server-side elimination → Layer 2 systemd-creds + TPM2 → Layer 3 GitLab runtime via tmpfs → Layer 4 root-compromise prevention). Removed unused `gitlab.private_token` from seed schema. Added DEPLOY.md §2a clarifying which secret belongs where. Closed Security Review finding T1.1a: `setup-borg-append-only.sh` now securely shreds the full-access SSH keys (with operator confirmation) instead of leaving them on disk with manual cleanup instructions. |
+| 2.2.1 | 2026-05-15 | Claude Code | **Correction**: v2.2 Appendix C.4 incorrectly assumed Hetzner Cloud Servers expose TPM/vTPM. They do not (per [Hetzner FAQ](https://docs.hetzner.com/de/cloud/servers/faq/)). C.4 rewritten around `systemd-creds` with the per-host-key fallback, with an explicit threat-properties table showing what this does and does not protect against. New C.4a documents the dedicated-hardware path for users who genuinely need TPM-grade sealing. SECURITY-ASSESSMENT.md §4.1 gained an explicit "Hetzner-side disk image exfiltration" row. SECURITY-REVIEW T1.1 Layer 2 status updated to reflect the host-key-only ceiling. |

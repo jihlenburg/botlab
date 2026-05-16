@@ -46,7 +46,7 @@ These risks the design explicitly accepts. They are revisited only when the unde
   - Removed unused `gitlab.private_token` field from `seed_schema.py` and `seed.example.yaml`. Pattern documented in Appendix C.3: per-cron-job tokens generated on demand at narrowest scope.
   - Documented in DEPLOY.md §2a which secret belongs where. "If a script on the server doesn't need to read it at 03:00 on a Tuesday, it should not be on the server."
   - Verified `hcloud_token` is laptop-only (terraform runs from the laptop; the rendered `terraform.tfvars` is gitignored and never copied to the server).
-- *Layer 2 pending (TODO.md Phase 5)*: `systemd-creds` with TPM2 binding for Borg passphrase + S3 keys. Cron migrated to systemd timers as part of the same change.
+- *Layer 2 pending (TODO.md Phase 5)*: `systemd-creds` with the **per-host-key fallback** (Hetzner Cloud does not expose TPM/vTPM — see DESIGN.md §C.4 caveat box and the [Hetzner FAQ](https://docs.hetzner.com/de/cloud/servers/faq/)). This closes the backup-leak vector (encrypted credentials and the host key are both excluded from our backups) but does **not** protect against Hetzner-side disk image exfiltration — both files live on the same disk. Accepted trade-off: TPM-grade sealing would require migrating to dedicated hardware (DESIGN.md §C.4a), which is disproportionate to the marginal gain at this scale. Cron will migrate to systemd timers as part of the same change (closes T2.3).
 - *Layer 3 pending (TODO.md Phase 5)*: GitLab runtime secrets (SMTP password, SAML cert) moved to `File.read` from tmpfs populated by a boot-time oneshot from systemd-creds.
 
 **T1.1a — Full-access SSH keys left on disk after "append-only" hardening** *(new finding, closed 2026-05-15)*
