@@ -114,7 +114,8 @@ See `docs/SECURITY-REVIEW-2026-05-15.md` for full context. Items grouped by tier
 - [ ] **T2.5** Confirm/configure LB sticky-session cookie flags (`Secure; HttpOnly; SameSite=Lax`)
 - [ ] **T2.6** Credential rotation matrix in DESIGN.md Appendix C (hcloud_token, GitLab PAT, SAML cert, SMTP password, SSH host keys, operator SSH keys)
 - [ ] **T2.7** AIDE file-integrity monitoring in cloud-init; nightly cron + Prometheus textfile metric; re-baseline as part of upgrade runbook
-- [ ] **T2.8** Document break-glass local admin account in DESIGN.md §5 and RUNBOOK-RECOVERY.md (2FA enabled, backup codes in offline kit, never used except for SSO recovery)
+- [x] **T2.8** Break-glass local admin account designed & documented — DESIGN.md §5.3.3 (account model), DEPLOY.md §5b (create before enabling auto-redirect; correct ordering enforced), RUNBOOK-RECOVERY.md Appendix D (SSO failure recovery procedure), `monitoring/alerts.yml` (`BreakGlassLoginUsed` alert wired up). Implementation pending first deploy.
+  - [ ] **T2.8a** Wire GitLab audit log → Prometheus textfile collector so `gitlab_break_glass_login_total` metric exists (the `BreakGlassLoginUsed` alert depends on it; alert rule is committed but the metric source isn't yet)
 
 **T3 — hardening polish backlog** (work after T1/T2 closed): commit signing decision, SBOM/signature spot-checks, LFS pre-signed URL TTL, log retention policy, annual security tabletop exercise, `SECURITY.md` responsible-disclosure path, verify gitleaks runs in CI not just pre-commit.
 

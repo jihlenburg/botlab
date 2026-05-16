@@ -124,10 +124,16 @@ These risks the design explicitly accepts. They are revisited only when the unde
 - *Recommendation*: install AIDE in cloud-init with a baseline taken after first reconfigure; nightly cron compares against baseline and emits a Prometheus textfile metric on diff. Quiet during legitimate `gitlab-ctl reconfigure` windows by re-baselining as part of the upgrade runbook.
 - *Target*: with monitoring stack rollout.
 
-**T2.8 — Break-glass account model undefined**
-- *Current state*: GitLab 2FA enforced; SSO via Azure AD. If Azure AD is down or our SAML cert expires, login fails. No documented break-glass account.
-- *Recommendation*: define a local-only admin account with 2FA *enabled* (TOTP, with backup codes stored in the offline recovery kit). Never used except for SSO recovery. Document the procedure in `RUNBOOK-RECOVERY.md`.
-- *Target*: with first deploy.
+**T2.8 — Break-glass account model** *(status: designed & documented 2026-05-15; implementation pending first deploy)*
+- *Original state*: GitLab 2FA enforced; SSO via Azure AD with `omniauth_auto_sign_in_with_provider = 'saml'`. If Azure AD is down or our SAML cert expires, every login redirects into the broken IdP. No documented break-glass.
+- *Design closed (this review)*:
+  - DESIGN.md §5.3.3 documents the account model: non-obvious username, email outside the Azure AD tenant (prevents accidental SSO auto-link), 32-char random password, TOTP with backup codes, GitLab Administrator role, single-purpose use.
+  - DEPLOY.md §5 expanded to 5a-5d with the **correct creation ordering** — break-glass must be created BEFORE enabling auto-redirect, otherwise the deploy creates a chicken-and-egg lockout.
+  - RUNBOOK-RECOVERY.md Appendix D documents the recovery procedure end-to-end: bypass URL (`?auto_sign_in=false`), TOTP backup-code use, server-side `gitlab-rake password reset` as backup-to-the-backup, common SAML failure modes and fixes, mandatory post-recovery rotation.
+  - DEPLOY.md §9 (offline kit) lists every break-glass artifact that must live offline: username, email, password, TOTP secret seed, all 10 backup codes, last-verified date.
+  - Rationale for TOTP (not WebAuthn) recorded inline: WebAuthn requires a physical device that may not be reachable during recovery; the offline kit is the only thing we guarantee is always reachable.
+- *Implementation pending*: actually creating the account during the first deploy. Tracked under TODO.md Phase 4.
+- *Sub-finding T2.8a (NEW)*: the `BreakGlassLoginUsed` alert in `monitoring/alerts.yml` depends on a `gitlab_break_glass_login_total` metric that doesn't exist yet. Needs a GitLab audit-log → Prometheus textfile-collector bridge. Alert rule is committed in advance to make the wiring target unambiguous. Tracked separately in TODO.md.
 
 ---
 
@@ -172,7 +178,7 @@ The following new entries are added to `TODO.md` under Phase 5 (Security Hardeni
 - T2.5 — Confirm/configure LB sticky-cookie flags
 - T2.6 — Credential rotation matrix in DESIGN.md Appendix C
 - T2.7 — AIDE file-integrity monitoring in cloud-init
-- T2.8 — Document break-glass admin account in DESIGN.md §5 + RUNBOOK
+- ~~T2.8 — Document break-glass admin account~~ — **closed in-review 2026-05-15** (DESIGN.md §5.3.3, DEPLOY.md §5b, RUNBOOK-RECOVERY.md Appendix D, alert rule). New sub-finding T2.8a opened for the metric-source bridge.
 - T3.x items folded into a single "T3 hardening polish backlog" entry
 
 ---

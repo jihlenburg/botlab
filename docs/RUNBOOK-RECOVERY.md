@@ -231,3 +231,79 @@ Total time in this case: ~3 hours, not 1-2. The cross-provider S3 tier (Wasabi/B
 - `aws` CLI — S3 Object Lock tier. Configured against whichever provider holds the immutable bucket.
 - `scripts/restore-gitlab.sh` — opinionated wrapper around steps 3-5. Use this if you want; the manual commands above are what it executes.
 - `scripts/verify-backup.sh` — JSON-output sanity check on a candidate backup.
+
+---
+
+## Appendix D — SSO Failure Recovery
+
+**Use this when**: GitLab is up (`/-/health` returns 200) but you can't log in because every login redirects to Azure AD and Azure AD is broken, unreachable, has an expired IdP cert, or your M365 tenant has any other kind of problem.
+
+**Do NOT use this when**: GitLab itself is down. That's a different runbook (sections 1-7 of this document).
+
+### D.1 Triage (2 min)
+
+- [ ] Confirm GitLab is actually up: `curl -fsS https://<domain>/-/health` returns 200
+- [ ] Confirm the problem is SSO-side: in a fresh incognito window, visit `https://<domain>` and observe the redirect to Azure AD. The Azure AD page either fails to load, shows a Microsoft error, or you complete the login and get bounced back to a GitLab error
+- [ ] Check Azure AD service status at `https://status.azure.com/` and the M365 admin centre for tenant-level alerts
+
+If GitLab is down, exit this appendix and use sections 1-7. If Azure is up but GitLab still rejects the SAML response, the IdP cert may have rotated — note this for §D.4.
+
+### D.2 Bypass URL login (5 min)
+
+```
+https://<domain>/users/sign_in?auto_sign_in=false
+```
+
+- [ ] Open the bypass URL in an incognito window
+- [ ] Username/password form appears (no auto-redirect)
+- [ ] Enter the break-glass username and password from the **offline recovery kit**
+- [ ] Complete the TOTP challenge using either a TOTP app re-seeded from the TOTP secret in the kit, or one of the 10 backup codes (mark it used in the kit)
+- [ ] You should land on the GitLab dashboard as Administrator
+
+If this works, proceed to §D.4. If it fails, proceed to §D.3.
+
+### D.3 Last-resort: server-side password reset (10 min)
+
+Use this **only** if the bypass URL won't authenticate the break-glass account (forgotten/rotated password not yet in the kit, lost TOTP, etc.).
+
+```bash
+ssh root@<gitlab-server>
+# Reset the break-glass password (replace with the username from your kit)
+sudo gitlab-rake "gitlab:password:reset[recovery-XXXXXX]"
+# Prompt: enter a new password (32+ chars; generate with `openssl rand -base64 24`)
+
+# If 2FA is also broken, disable it for this one account:
+sudo gitlab-rails runner "user = User.find_by(username: 'recovery-XXXXXX'); user.disable_two_factor!; user.save!"
+```
+
+- [ ] Update the offline kit IMMEDIATELY with the new password
+- [ ] Re-enable 2FA via the web UI as soon as you're logged in; update the kit with the new TOTP secret and backup codes
+- [ ] Note this event in the post-incident report; it's a kit-drift indicator
+
+### D.4 Restore SSO (variable time)
+
+Once logged in as the break-glass admin, you can reach **Admin → Settings → General → Sign-in restrictions** and **Admin → Applications** to inspect SAML state. Common causes and fixes:
+
+| Symptom | Likely cause | Fix |
+|---------|-------------|-----|
+| Azure AD returns "AADSTS50011" (redirect URI mismatch) | Reply URL in Enterprise App doesn't match GitLab's callback | Update Reply URL in Azure to `https://<domain>/users/auth/saml/callback` |
+| SAML response signature invalid | Azure AD rotated the IdP signing cert | Download new federation metadata from Azure; update `idp_cert` in `gitlab.rb`; `gitlab-ctl reconfigure` |
+| "Could not authenticate you from SAML" | `omniauth_auto_link_saml_user` mismatch — email in assertion doesn't match any GitLab account | Check assertion in GitLab's `production.log`; verify email claim mapping in Azure |
+| Login loop / no error | IdP target URL changed (rare) | Update `idp_sso_target_url` in `gitlab.rb`; `gitlab-ctl reconfigure` |
+
+**While you're investigating, consider** disabling auto-redirect so other operators can still use SSO when it's flaky:
+
+```ruby
+# Temporary in /etc/gitlab/gitlab.rb — comment out, then reconfigure:
+# gitlab_rails['omniauth_auto_sign_in_with_provider'] = 'saml'
+```
+
+`gitlab-ctl reconfigure`. Users will then see a "Sign in with ACME Corp SSO" button rather than auto-redirecting; they can retry if SSO fails. Re-enable once stable.
+
+### D.5 Post-recovery (mandatory, do not skip)
+
+- [ ] **Rotate the break-glass password** even if no compromise is suspected. Every use is a chance for exposure (screen-share, over-the-shoulder, browser history).
+- [ ] **Update the offline kit** with the new password. Verify both copies (off-site + safe) are updated.
+- [ ] **Confirm the `BreakGlassLoginUsed` alert fired** (when the audit-log-to-Prometheus bridge is wired). If it didn't, that's a separate finding — file it.
+- [ ] **Write a brief post-incident note**: what failed in SSO, what you did, what worked, what didn't. File it alongside other security artifacts.
+- [ ] **Reset the kit's "Last verified" date** — this use counts as a verification (no need to also do the next quarterly check).

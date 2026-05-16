@@ -153,15 +153,60 @@ Set the initial root password via the web UI on first visit (GitLab generates on
 
 ---
 
-## 5. Wire up Azure AD SSO (30 min)
+## 5. Wire up Azure AD SSO (45 min)
 
-Done in the Azure portal + a second `gitlab-ctl reconfigure`. The detailed steps are in DESIGN.md §5.3; the highlights:
+**Order matters.** The break-glass admin account MUST be created BEFORE enabling `omniauth_auto_sign_in_with_provider`. Otherwise you'll create a chicken-and-egg: SSO is broken, no local admin exists, no way in. The steps below are in the correct order.
+
+### 5a. Configure Azure AD (15 min)
 
 - [ ] Create an Enterprise Application "GitLab ACME Corp"
 - [ ] Set the Identifier, Reply URL, Sign-on URL to your `<domain>`
+- [ ] Add the GitLab user group(s) as assigned users — do NOT leave it open to "all users in tenant" unless that's actually intended
+- [ ] Note the IdP cert and SSO target URL for §5c
+
+### 5b. Create the break-glass local admin (10 min)
+
+Done via the GitLab web UI as the initial root account, **before any SAML config is added** to `gitlab.rb`.
+
+```bash
+# Get the initial root password (set by omnibus at install time)
+ssh root@<gitlab-public-ip> 'cat /etc/gitlab/initial_root_password'
+```
+
+Log in to `https://<domain>` as `root` with that password. Then:
+
+- [ ] Generate the break-glass identity (record EVERYTHING in the offline kit immediately):
+  ```bash
+  # On the operator workstation
+  echo "Username:  recovery-$(openssl rand -hex 3)"
+  echo "Email:     break-glass-$(openssl rand -hex 4)@<your-local-domain>"
+  echo "Password:  $(openssl rand -base64 24)"
+  ```
+  Where `<your-local-domain>` is one that does NOT exist in your Azure AD tenant (prevents accidental SSO auto-link). A subdomain you control but don't sync to Entra is fine.
+- [ ] In the GitLab admin area: **Admin → Users → New user** with the above
+- [ ] Set **Access level → Administrator**, **Can create group → No**, **External → No**, **Confirmation → Skip user confirmation**
+- [ ] Save. Log out as root. Log back in as the new break-glass user with the password above.
+- [ ] **Enable 2FA (TOTP)**: Profile → Account → Two-Factor Authentication → Enable. Scan the QR code with an authenticator app on a phone/computer that you control. **Save the TOTP secret seed AND all 10 backup codes to the offline kit.** Verify by completing a 2FA challenge.
+- [ ] Log out and back in via the bypass URL `https://<domain>/users/sign_in?auto_sign_in=false` to confirm the path works.
+- [ ] Now demote the root account: log in as root one last time, **Admin → Users → root → Edit** → set a fresh 32-char random password (also save to offline kit), block the account, save. From now on, all local-auth admin access is via the break-glass account.
+
+### 5c. Add SAML configuration to gitlab.rb (15 min)
+
 - [ ] Copy the IdP cert and SSO target URL into `gitlab.rb` (`omniauth_providers`)
+- [ ] **DO NOT yet add `omniauth_auto_sign_in_with_provider = 'saml'`** — see §5d.
 - [ ] `gitlab-ctl reconfigure`
-- [ ] Log in once via SSO from your laptop to confirm; keep a **local admin account** as break-glass for SSO outages
+- [ ] From a fresh browser session: visit `https://<domain>`, click "ACME Corp SSO". Confirm SSO works end-to-end. Your Azure AD user gets a new GitLab account (because `omniauth_auto_link_saml_user = true`).
+- [ ] Log out. Visit the bypass URL `https://<domain>/users/sign_in?auto_sign_in=false` and confirm you can still reach the local-auth form (the break-glass should still work even with SAML enabled).
+
+### 5d. Enable auto-redirect (5 min)
+
+This is the step that creates the chicken-and-egg risk if §5b is skipped. Do not run this until break-glass is verified.
+
+- [ ] Add `gitlab_rails['omniauth_auto_sign_in_with_provider'] = 'saml'` to `gitlab.rb`
+- [ ] `gitlab-ctl reconfigure`
+- [ ] Visit `https://<domain>` — should auto-redirect to Azure AD. Confirm.
+- [ ] **Critical verification**: visit `https://<domain>/users/sign_in?auto_sign_in=false` — should STILL show the local-auth form. If this is broken, revert §5d immediately and investigate. The bypass URL is your only path back during an SSO outage.
+- [ ] Confirm `BreakGlassLoginUsed` alert in `monitoring/alerts.yml` is loaded (the alert will fire on your verification login if the audit-log-to-Prometheus bridge is up; if the bridge isn't up yet, note it in TODO.md for follow-up).
 
 ---
 
@@ -224,12 +269,21 @@ Put the following on an encrypted USB drive (or split between two — one for of
 
 - [ ] `seed.yaml` (the source of truth; everything else can be regenerated from it)
 - [ ] Borg **full-access** passphrase (NOT the append-only key on the server)
+- [ ] Borg **full-access** SSH private key (the one `setup-borg-append-only.sh` Step 7 prompted you to shred from the server)
 - [ ] `gitlab-secrets.json` (copy it after first `gitlab-ctl reconfigure`)
 - [ ] Snapshot of `terraform.tfstate` (or credentials for the remote state backend)
 - [ ] SSH private keys matching `ssh_public_keys`
-- [ ] A printed copy of [RUNBOOK-RECOVERY.md](RUNBOOK-RECOVERY.md)
+- [ ] **Break-glass admin credentials** (from §5b):
+  - [ ] Username (e.g. `recovery-a3f7c2`)
+  - [ ] Email (e.g. `break-glass-7b21@<your-local-domain>`)
+  - [ ] Password (32-char random, current value — rotate after every use)
+  - [ ] TOTP secret seed (base32 string from QR code setup)
+  - [ ] All 10 TOTP backup codes
+  - [ ] Last verified date (initially today; updated each quarterly verification)
+- [ ] **Disabled-root password** (the rotated password set in §5b, in case break-glass is ever lost too)
+- [ ] A printed copy of [RUNBOOK-RECOVERY.md](RUNBOOK-RECOVERY.md) — Appendix D in particular
 
-Test the kit: on a fresh machine, can you read every file? If not, fix it now, not during an incident.
+Test the kit: on a fresh machine, can you read every file? If not, fix it now, not during an incident. For the break-glass credentials specifically, perform a real login via the bypass URL `https://<domain>/users/sign_in?auto_sign_in=false` as part of this verification.
 
 ---
 

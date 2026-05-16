@@ -1,6 +1,6 @@
 # ACME Corp GitLab Infrastructure - Master Design Document
 
-**Version**: 2.2.1
+**Version**: 2.3
 **Last Updated**: 2026-05-15
 **Status**: Draft - Pending Approval
 
@@ -470,6 +470,55 @@ gitlab_rails['omniauth_providers'] = [
 ```
 
 **Note**: GitLab CE supports SAML SSO. Users are auto-created on first login. Group assignment is manual (automatic group sync requires EE).
+
+#### 5.3.3 Break-Glass Local Admin Account
+
+`omniauth_auto_sign_in_with_provider = 'saml'` makes every login attempt redirect to Azure AD. If Azure AD is unavailable — outage, expired IdP cert, SAML metadata change, M365 tenant suspension — every login fails and no operator can reach the GitLab admin UI to fix the SSO configuration.
+
+We mitigate this with a **single local-auth admin account** used only for SSO recovery.
+
+**Properties of the break-glass account:**
+
+| Attribute | Value |
+|-----------|-------|
+| Username | Non-obvious (e.g. `recovery-${random6}`) — recorded ONLY in the offline kit, never in this document or in `seed.yaml` |
+| Email | `break-glass-${random}@<your-local-domain>` — must NOT match any Azure AD identity (prevents accidental SSO auto-link) |
+| Password | 32+ chars, generated with `openssl rand -base64 24`. Stored in offline kit. |
+| 2FA | TOTP enabled at creation. TOTP seed + 10 backup codes stored in offline kit. (Not WebAuthn — a physical hardware token cannot be assumed present during recovery; the offline kit is the only thing we guarantee is reachable.) |
+| Admin level | GitLab Administrator |
+| State in normal operation | Active but unused. Any login generates a critical alert. |
+
+**How to reach it during an SSO outage:**
+
+```
+https://<domain>/users/sign_in?auto_sign_in=false
+```
+
+The `?auto_sign_in=false` query parameter is a standard GitLab pattern. It bypasses the auto-redirect to Azure AD for that one login flow, presents the local-auth username/password form, then proceeds through normal 2FA. No changes to `gitlab.rb` are required to use it.
+
+**Backup-to-the-backup** — if even the break-glass account is broken (forgotten password, lost TOTP, stolen kit), the server-side last-resort path is:
+
+```bash
+ssh root@<gitlab-server>
+gitlab-rake "gitlab:password:reset[recovery-${random6}]"
+# Prompted for new password; updates the account directly via Rails console.
+```
+
+This requires SSH access and works regardless of SSO state. Document it in the runbook but treat it as truly last-resort — every routine break-glass use should go through the bypass URL so the audit trail is consistent.
+
+**Detection** — `monitoring/alerts.yml` defines a `BreakGlassLoginUsed` alert that fires on any login by the break-glass username. The intended dispatch:
+
+- **You** used it (real SSO outage) → you see the alert, confirm, move on
+- **Anyone else** used it → critical incident, rotate the break-glass credentials immediately, audit access to the offline kit
+
+The metric this alert depends on is a GitLab-audit-log-to-Prometheus bridge that is not yet wired (see TODO.md). Until that bridge exists, detection is by periodic manual log review — much weaker. Implementing the bridge is on the same TODO line as the alert itself.
+
+**Lifecycle** — see DESIGN.md Appendix C.8 (credential rotation matrix):
+- **Quarterly**: log in once via the bypass URL to verify the kit still works. Rotate password and update kit. Record the verification date in the offline kit and as a comment in `seed.yaml`.
+- **After any real use**: rotate password immediately, update kit, log the event in the post-incident report.
+- **Operator turnover**: rotate immediately if the departing operator had ever held the offline kit.
+
+**What this account is NOT for**: routine administration. Day-to-day admin actions go through SSO so that the audit trail names the actual operator. The break-glass exists to *restore SSO*, not to bypass it.
 
 ### 5.4 Git LFS Configuration
 
@@ -1386,3 +1435,4 @@ Track "last rotated" dates either in `seed.yaml` as comments next to each value 
 | 2.1 | 2026-05-15 | Claude Code | Pinned GitLab version (new §5.6 upgrade runbook); added §7.5 external dead-man's-switch observer; reconciled backup retention numbers (12-month monthlies everywhere); fixed cloud-init backup script to honour `/etc/gitlab-backup.conf`. Extracted DR steps to `RUNBOOK-RECOVERY.md`; added first-deploy `DEPLOY.md`; added Appendix C (sops + age secrets management); shipped starter `monitoring/alerts.yml` including the `Watchdog` dead-man alert. |
 | 2.2 | 2026-05-15 | Claude Code | Rewrote Appendix C as **Layered Secrets Management** (Layer 1 server-side elimination → Layer 2 systemd-creds + TPM2 → Layer 3 GitLab runtime via tmpfs → Layer 4 root-compromise prevention). Removed unused `gitlab.private_token` from seed schema. Added DEPLOY.md §2a clarifying which secret belongs where. Closed Security Review finding T1.1a: `setup-borg-append-only.sh` now securely shreds the full-access SSH keys (with operator confirmation) instead of leaving them on disk with manual cleanup instructions. |
 | 2.2.1 | 2026-05-15 | Claude Code | **Correction**: v2.2 Appendix C.4 incorrectly assumed Hetzner Cloud Servers expose TPM/vTPM. They do not (per [Hetzner FAQ](https://docs.hetzner.com/de/cloud/servers/faq/)). C.4 rewritten around `systemd-creds` with the per-host-key fallback, with an explicit threat-properties table showing what this does and does not protect against. New C.4a documents the dedicated-hardware path for users who genuinely need TPM-grade sealing. SECURITY-ASSESSMENT.md §4.1 gained an explicit "Hetzner-side disk image exfiltration" row. SECURITY-REVIEW T1.1 Layer 2 status updated to reflect the host-key-only ceiling. |
+| 2.3 | 2026-05-15 | Claude Code | Closed Security Review T2.8 — break-glass local admin account. New §5.3.3 documents the account model (non-obvious username, email outside Entra tenant, 32-char password + TOTP with offline backup codes, single-purpose use). DEPLOY.md §5 split into 5a-5d to enforce correct ordering: create break-glass BEFORE enabling `omniauth_auto_sign_in_with_provider` to avoid the chicken-and-egg lockout. New RUNBOOK-RECOVERY.md Appendix D covers SSO failure recovery end-to-end (bypass URL, TOTP backup codes, `gitlab-rake` last-resort reset, common SAML failure modes). New `BreakGlassLoginUsed` alert rule committed. Sub-finding T2.8a opened: alert depends on a not-yet-wired GitLab audit-log → Prometheus bridge. |
