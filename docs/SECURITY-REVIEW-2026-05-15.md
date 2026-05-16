@@ -124,16 +124,21 @@ These risks the design explicitly accepts. They are revisited only when the unde
 - *Recommendation*: install AIDE in cloud-init with a baseline taken after first reconfigure; nightly cron compares against baseline and emits a Prometheus textfile metric on diff. Quiet during legitimate `gitlab-ctl reconfigure` windows by re-baselining as part of the upgrade runbook.
 - *Target*: with monitoring stack rollout.
 
-**T2.8 — Break-glass account model** *(status: designed & documented 2026-05-15; implementation pending first deploy)*
+**T2.8 — Break-glass account model** *(status: scripted, verified, alert-instrumented 2026-05-15; account creation in prod pending first deploy)*
 - *Original state*: GitLab 2FA enforced; SSO via Azure AD with `omniauth_auto_sign_in_with_provider = 'saml'`. If Azure AD is down or our SAML cert expires, every login redirects into the broken IdP. No documented break-glass.
-- *Design closed (this review)*:
-  - DESIGN.md §5.3.3 documents the account model: non-obvious username, email outside the Azure AD tenant (prevents accidental SSO auto-link), 32-char random password, TOTP with backup codes, GitLab Administrator role, single-purpose use.
-  - DEPLOY.md §5 expanded to 5a-5d with the **correct creation ordering** — break-glass must be created BEFORE enabling auto-redirect, otherwise the deploy creates a chicken-and-egg lockout.
-  - RUNBOOK-RECOVERY.md Appendix D documents the recovery procedure end-to-end: bypass URL (`?auto_sign_in=false`), TOTP backup-code use, server-side `gitlab-rake password reset` as backup-to-the-backup, common SAML failure modes and fixes, mandatory post-recovery rotation.
-  - DEPLOY.md §9 (offline kit) lists every break-glass artifact that must live offline: username, email, password, TOTP secret seed, all 10 backup codes, last-verified date.
-  - Rationale for TOTP (not WebAuthn) recorded inline: WebAuthn requires a physical device that may not be reachable during recovery; the offline kit is the only thing we guarantee is always reachable.
-- *Implementation pending*: actually creating the account during the first deploy. Tracked under TODO.md Phase 4.
-- *Sub-finding T2.8a (NEW)*: the `BreakGlassLoginUsed` alert in `monitoring/alerts.yml` depends on a `gitlab_break_glass_login_total` metric that doesn't exist yet. Needs a GitLab audit-log → Prometheus textfile-collector bridge. Alert rule is committed in advance to make the wiring target unambiguous. Tracked separately in TODO.md.
+- *Design closed*:
+  - DESIGN.md §5.3.3 documents the account model. TOTP-not-WebAuthn rationale recorded inline.
+  - DEPLOY.md §5a-5d enforces the **correct creation ordering** in docs AND at runtime — `setup-break-glass.sh` now refuses to run if `omniauth_auto_sign_in_with_provider` is already set, eliminating the chicken-and-egg risk.
+  - RUNBOOK-RECOVERY.md Appendix D §D.1-D.8 covers recovery end-to-end including the worst case (§D.6: account doesn't exist at all), TOTP rotation after suspected leak (§D.7), and the manual `gitlab-rails` audit query (§D.8) used until T2.8a closes.
+- *Tooling delivered*:
+  - `scripts/setup-break-glass.sh` — creates the account via `gitlab-rails runner` (no UI clicks). Generates the username/email/password, attempts server-side TOTP provisioning, and prints all credentials in a single kit-ready block. Falls back gracefully if the GitLab TOTP API differs from the tested 17.x shape.
+  - `scripts/verify-break-glass.sh` — confirms account state (exists, admin, confirmed, 2FA, not blocked) AND that the bypass URL serves the local-auth form. Emits Prometheus textfile metrics (`gitlab_break_glass_account_present`, `gitlab_break_glass_verification_ok`, `gitlab_break_glass_kit_verified_timestamp`).
+  - `docs/OFFLINE-KIT-TEMPLATE.md` — single copyable template that centralises the kit's contents and rotation cadence (previously scattered across DEPLOY.md §9, RUNBOOK Appendix D, DESIGN.md C.7).
+  - `monitoring/alerts.yml` — five `BreakGlass*` rules: `LoginUsed` (depends on T2.8a metric source), `AccountMissing` (critical), `KitVerificationStale` (100d warn), `KitVerificationCritical` (180d critical), `VerifyScriptNotRunning` (40d absent).
+- *Implementation pending*:
+  - **T2.8a** — GitLab audit-log → Prometheus textfile-collector bridge for `gitlab_break_glass_login_total`. Without it, `BreakGlassLoginUsed` is decorative; §D.8 documents the manual `gitlab-rails` query as the interim.
+  - **T2.8b** — systemd timer/service for monthly `verify-break-glass.sh` runs. Authored alongside the Phase 4 monitoring rollout.
+  - Actual account creation in production (Phase 4 deploy task — run `setup-break-glass.sh` per DEPLOY.md §5b).
 
 ---
 

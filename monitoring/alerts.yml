@@ -165,12 +165,10 @@ groups:
       # Anyone else using it: critical incident, rotate the break-glass
       # credentials and audit access to the offline kit.
       #
-      # METRIC SOURCE GAP: this metric does not exist yet. It depends on
-      # a GitLab audit-log → Prometheus bridge that's tracked as a TODO.
-      # The alert rule is committed in advance so the wiring has a target.
-      # The `{username=...}` label is parameterised so the actual
-      # break-glass username (recorded only in the offline kit) doesn't
-      # leak into the repo.
+      # METRIC SOURCE GAP: gitlab_break_glass_login_total does not exist
+      # yet. It depends on a GitLab audit-log → Prometheus bridge that's
+      # tracked in TODO.md as T2.8a. The alert rule is committed in
+      # advance so the wiring has an unambiguous target.
       - alert: BreakGlassLoginUsed
         expr: increase(gitlab_break_glass_login_total[5m]) > 0
         for: 0m
@@ -180,6 +178,50 @@ groups:
           summary: "Break-glass admin account login detected"
           description: "If this is you (real SSO outage), confirm and move on. If not, treat as a compromise: rotate break-glass credentials immediately and audit offline-kit access."
           runbook: "docs/RUNBOOK-RECOVERY.md Appendix D"
+
+      # Emitted by scripts/verify-break-glass.sh via the textfile collector.
+      # Account missing = current SSO config could lock everyone out.
+      - alert: BreakGlassAccountMissing
+        expr: gitlab_break_glass_account_present == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Break-glass admin account is MISSING from GitLab"
+          description: "The account scripts/verify-break-glass.sh checks for does not exist. Either it was deleted (attack? deploy mistake?) or the kit's username doesn't match reality. Investigate immediately — with auto-redirect SSO enabled, an Azure AD outage now means total lockout."
+          runbook: "docs/RUNBOOK-RECOVERY.md Appendix D §D.6"
+
+      # Quarterly verification cadence enforcement. Warn after 100 days,
+      # critical after 180. The verify script updates the timestamp on
+      # success; if the script stops running or starts failing, this fires.
+      - alert: BreakGlassKitVerificationStale
+        expr: time() - gitlab_break_glass_kit_verified_timestamp > 100 * 24 * 3600
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Break-glass kit verification > 100 days old"
+          description: "Run scripts/verify-break-glass.sh AND do a real login via the bypass URL from the offline kit. Quarterly cadence has slipped."
+
+      - alert: BreakGlassKitVerificationCritical
+        expr: time() - gitlab_break_glass_kit_verified_timestamp > 180 * 24 * 3600
+        for: 1h
+        labels:
+          severity: critical
+        annotations:
+          summary: "Break-glass kit verification > 180 days old"
+          description: "Kit may have rotted (TOTP drift, lost backup codes, forgotten password). Verify NOW before you need it for real."
+
+      # Sanity: if the verification metric is absent entirely, the
+      # verify script has stopped running.
+      - alert: BreakGlassVerifyScriptNotRunning
+        expr: absent_over_time(gitlab_break_glass_kit_verified_timestamp[40d])
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "scripts/verify-break-glass.sh has not produced metrics in 40+ days"
+          description: "Check the systemd timer or cron entry for verify-break-glass.sh."
 
   - name: dead-mans-switch
     interval: 1m

@@ -187,6 +187,7 @@ Update DNS directly to the new server's public IP. TTL is 300s by design (see DE
   ssh root@$NEW_IP /usr/local/bin/gitlab-backup-to-borg.sh
   ```
 - [ ] **Trigger an out-of-band restore test** against the fresh backup to confirm the new server's backups are recoverable.
+- [ ] **Verify the break-glass admin account** survived the restore. The account lives in GitLab's `users` table and is included in `gitlab-backup`, so a normal restore brings it back with the same username, password hash, and TOTP secret as before the disaster. Confirm with `scripts/verify-break-glass.sh <username-from-kit>`. If the restore predates §5b of the original deploy, the account won't exist — fall through to Appendix D §D.6.
 - [ ] **If the cause was compromise**: take a forensic image of the old server before destroying it. `hcloud server create-image` produces a snapshot you can pull down later for offline analysis.
 - [ ] **Destroy the old server resource in Terraform** only after the forensic image (if any) is captured and the new server has been operating cleanly for at least one full backup cycle.
 - [ ] **Write the post-incident report**. Include: detection method, recovery steps actually taken (deltas from this runbook), data loss assessment vs. RPO, action items.
@@ -304,6 +305,85 @@ Once logged in as the break-glass admin, you can reach **Admin → Settings → 
 
 - [ ] **Rotate the break-glass password** even if no compromise is suspected. Every use is a chance for exposure (screen-share, over-the-shoulder, browser history).
 - [ ] **Update the offline kit** with the new password. Verify both copies (off-site + safe) are updated.
-- [ ] **Confirm the `BreakGlassLoginUsed` alert fired** (when the audit-log-to-Prometheus bridge is wired). If it didn't, that's a separate finding — file it.
+- [ ] **Confirm the `BreakGlassLoginUsed` alert fired** (when the audit-log-to-Prometheus bridge is wired — see §D.8 for the manual query until then). If the bridge is up and the alert did NOT fire, that's a separate finding — file it.
 - [ ] **Write a brief post-incident note**: what failed in SSO, what you did, what worked, what didn't. File it alongside other security artifacts.
 - [ ] **Reset the kit's "Last verified" date** — this use counts as a verification (no need to also do the next quarterly check).
+
+### D.6 If the break-glass account doesn't exist at all
+
+This is the worst case. There is no local admin to fall back to. Either step 5b of DEPLOY.md was skipped during the original deploy, or an attacker deleted the account, or a restore from a backup taken before §5b ran has been applied. If `auto_sign_in_with_provider` is enabled in `gitlab.rb` and Azure AD is also down, you are completely locked out of the web UI — SSH and `gitlab-rails` are your only path.
+
+**Option 1 — re-run the setup script** (preferred if available on the box):
+
+```bash
+ssh root@<gitlab-server>
+/opt/botlab/scripts/setup-break-glass.sh <your-local-email-domain>
+```
+
+The script generates fresh credentials and prints them in a kit-ready block. **Immediately update the offline recovery kit** — the old kit entries (if any) are now wrong. Then run `scripts/verify-break-glass.sh <new-username>` to confirm.
+
+**Option 2 — emergency manual creation via `gitlab-rails runner`** (when the script is missing — pre-Phase-4 deploys, or someone deleted `/opt/botlab/`):
+
+```bash
+ssh root@<gitlab-server>
+NEW_PASS="$(openssl rand -base64 24)"
+echo "TEMP PASSWORD (capture NOW): $NEW_PASS"
+
+gitlab-rails runner "
+user = User.new(
+  username: 'recovery-emergency',
+  email:    'emergency@<your-local-domain>',
+  name:     'Emergency Recovery',
+  password: '$NEW_PASS',
+  password_confirmation: '$NEW_PASS',
+  admin:    true,
+  external: false
+)
+user.skip_confirmation!
+user.save!
+puts user.errors.full_messages if user.errors.any?
+puts \"Created: #{user.username} / #{user.email}\"
+"
+```
+
+Then log in via the bypass URL, enable 2FA through the UI immediately, capture the seed and backup codes into the offline kit, and rotate the temporary password to a fresh 32-char random.
+
+**After either option**, run §D.5 (post-recovery) as if you'd just done a normal break-glass use.
+
+### D.7 Rotating the TOTP secret after a suspected kit leak
+
+If you suspect the offline kit was seen by someone unauthorised (lost USB, witnessed during use, kit-storage compromise), rotate both the password (§D.5) and the TOTP secret.
+
+1. Log in via the bypass URL with the current password and a fresh TOTP code.
+2. **Profile → Account → Two-Factor Authentication → Disable.** GitLab requires your current password to confirm.
+3. Immediately re-enable: **Two-Factor Authentication → Enable.** A new QR code and secret are shown.
+4. Capture the new TOTP secret seed AND 10 fresh backup codes into the offline kit. Destroy the previous entries.
+5. Verify with the new app entry, log out, log back in once to confirm.
+6. Note the rotation date in the kit's verification log.
+
+If you cannot log in to perform steps 1-2 (the leaked TOTP may have been used to lock you out already), use the server-side reset from §D.3 to disable 2FA, then re-enable via the UI.
+
+### D.8 Manually checking break-glass usage
+
+The `BreakGlassLoginUsed` Alertmanager rule depends on a metric (`gitlab_break_glass_login_total`) that's wired from GitLab's audit log via a textfile-collector bridge. Until that bridge exists (TODO.md T2.8a), check manually:
+
+```bash
+ssh root@<gitlab-server>
+gitlab-rails runner '
+username = "recovery-XXXXXX"  # replace with the username from your kit
+events = AuditEvent.where("author_name = ? OR details ILIKE ?", username, "%#{username}%").order(created_at: :desc).limit(20)
+if events.empty?
+  puts "No audit events for #{username}"
+else
+  events.each { |e| puts "#{e.created_at}  #{e.entity_type}  #{e.details}" }
+end
+'
+```
+
+Recommended cadence:
+
+- **Weekly** during normal operation (until the bridge is built).
+- **Immediately** after any suspicious incident or anomalous Alertmanager activity.
+- **Always** before declaring a break-glass-related incident closed.
+
+Anything in the output that you did not personally do is an incident.

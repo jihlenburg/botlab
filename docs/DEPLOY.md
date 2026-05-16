@@ -166,29 +166,30 @@ Set the initial root password via the web UI on first visit (GitLab generates on
 
 ### 5b. Create the break-glass local admin (10 min)
 
-Done via the GitLab web UI as the initial root account, **before any SAML config is added** to `gitlab.rb`.
+**Before any SAML config is added** to `gitlab.rb`. The setup script provisions the account, generates the TOTP secret server-side, and prints everything in a kit-ready block.
 
 ```bash
-# Get the initial root password (set by omnibus at install time)
-ssh root@<gitlab-public-ip> 'cat /etc/gitlab/initial_root_password'
+ssh root@<gitlab-public-ip>
+/opt/botlab/scripts/setup-break-glass.sh <your-local-email-domain>
 ```
 
-Log in to `https://<domain>` as `root` with that password. Then:
+Where `<your-local-email-domain>` is a domain that does NOT exist in your Azure AD tenant — a subdomain you control but don't sync to Entra is ideal. This prevents accidental SSO auto-link via `omniauth_auto_link_saml_user`.
 
-- [ ] Generate the break-glass identity (record EVERYTHING in the offline kit immediately):
-  ```bash
-  # On the operator workstation
-  echo "Username:  recovery-$(openssl rand -hex 3)"
-  echo "Email:     break-glass-$(openssl rand -hex 4)@<your-local-domain>"
-  echo "Password:  $(openssl rand -base64 24)"
-  ```
-  Where `<your-local-domain>` is one that does NOT exist in your Azure AD tenant (prevents accidental SSO auto-link). A subdomain you control but don't sync to Entra is fine.
-- [ ] In the GitLab admin area: **Admin → Users → New user** with the above
-- [ ] Set **Access level → Administrator**, **Can create group → No**, **External → No**, **Confirmation → Skip user confirmation**
-- [ ] Save. Log out as root. Log back in as the new break-glass user with the password above.
-- [ ] **Enable 2FA (TOTP)**: Profile → Account → Two-Factor Authentication → Enable. Any standard RFC 6238 TOTP app works (Apple Passwords, 1Password, Bitwarden, Aegis, Google Authenticator) — scan the QR with whatever you'll use day-to-day. **Critical**: BEFORE dismissing the setup screen, also capture the **base32 secret seed** shown under "Can't scan? Enter this code manually" — paste it into the offline kit document. GitLab does NOT show this string again after setup; if you miss it you have to disable and re-enable TOTP. The seed in the offline kit is the authoritative source of truth — Apple Passwords / 1Password / etc. is a convenience overlay, not a replacement (see DESIGN.md §5.3.3). Also save **all 10 backup codes** to the offline kit. Verify by logging out and completing a 2FA challenge with both your chosen app and one of the backup codes (mark that code as used).
-- [ ] Log out and back in via the bypass URL `https://<domain>/users/sign_in?auto_sign_in=false` to confirm the path works.
-- [ ] Now demote the root account: log in as root one last time, **Admin → Users → root → Edit** → set a fresh 32-char random password (also save to offline kit), block the account, save. From now on, all local-auth admin access is via the break-glass account.
+- [ ] Run the script. It prints a block containing username, email, password, TOTP secret, TOTP provisioning URI, and 10 backup codes.
+- [ ] **Immediately** copy every field into the offline recovery kit (template: [docs/OFFLINE-KIT-TEMPLATE.md](OFFLINE-KIT-TEMPLATE.md) §4). This is the ONLY time the TOTP secret and backup codes are shown in plaintext.
+- [ ] Load the TOTP URI into your authenticator app. Any standard RFC 6238 app works (Apple Passwords, 1Password, Bitwarden, Aegis, Google Authenticator) — see DESIGN.md §5.3.3 for the convenience-vs-source-of-truth discussion.
+- [ ] Verify by logging in to `https://<domain>/users/sign_in?auto_sign_in=false` with the password + a TOTP code. Confirm you land on the GitLab dashboard as Administrator.
+- [ ] Verify a backup code works too: log out, log back in using the password + one of the 10 backup codes. **Mark that code as used in the kit.**
+- [ ] Run `/opt/botlab/scripts/verify-break-glass.sh <username>` and confirm it exits 0. This also writes the first Prometheus textfile metric for the verification-staleness alert.
+- [ ] Clear your terminal scrollback: `history -c && clear`.
+
+**Block the initial root account** (now redundant — the break-glass is your local-auth path):
+
+- [ ] Log in once as `root` via the bypass URL (the initial password is in `/etc/gitlab/initial_root_password` on the server).
+- [ ] **Admin → Users → root → Edit** → set a fresh 32-char random password (save to offline kit §5), then block the account, save.
+- [ ] From now on, all local-auth admin access is via the break-glass account.
+
+**Fallback if the setup script is unavailable** (pre-Phase-4 deploy, or you can't get to the script): the manual `gitlab-rails runner` snippet in RUNBOOK-RECOVERY.md Appendix D §D.6 Option 2 creates the same account by hand. Then enable 2FA through the web UI and capture the seed manually.
 
 ### 5c. Add SAML configuration to gitlab.rb (15 min)
 
@@ -265,7 +266,9 @@ If you skip this step, you have a fancy backup architecture and no actual disast
 
 ## 9. Build the offline recovery kit (15 min)
 
-Put the following on an encrypted USB drive (or split between two — one for off-site, one in a safe):
+Copy [docs/OFFLINE-KIT-TEMPLATE.md](OFFLINE-KIT-TEMPLATE.md), fill in every placeholder, and put it (plus the binary attachments it references — `gitlab-secrets.json`, `terraform.tfstate`, operator SSH private keys, Borg full-access key) on an encrypted USB drive. Splitting between two locations (off-site + on-site safe) is recommended.
+
+The template enumerates everything that belongs in the kit; the section below is a shorter checklist for the deploy flow:
 
 - [ ] `seed.yaml` (the source of truth; everything else can be regenerated from it)
 - [ ] Borg **full-access** passphrase (NOT the append-only key on the server)
