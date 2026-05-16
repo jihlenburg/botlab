@@ -87,7 +87,11 @@
 - [ ] Move S3 immutable copy to a non-Hetzner provider (Wasabi/B2/AWS) to decouple from Hetzner account lockout risk
 - [ ] Create offline backup recovery kit (Borg admin key, Terraform state snapshot, gitlab-secrets.json)
 - [ ] Configure fail2ban on the GitLab server (currently set up in cloud-init — verify in prod)
-- [ ] Adopt sops/age (or systemd-creds) for secrets on disk, replacing plaintext in `/etc/gitlab/gitlab.rb` and `/etc/gitlab-backup.conf` (see DESIGN.md Appendix C for the documented approach)
+- [~] **Layered secrets management** (per DESIGN.md Appendix C v2.2):
+  - [x] Layer 1 — eliminated unused `gitlab.private_token` from seed; documented laptop-only invariants in DEPLOY.md §2a; `setup-borg-append-only.sh` now securely shreds full-access SSH keys with operator confirmation
+  - [ ] Layer 2 — `systemd-creds` (TPM2-sealed where available) for Borg passphrase + S3 keys; migrate cron entries to systemd timers
+  - [ ] Layer 3 — GitLab runtime secrets (SMTP, SAML) moved to `File.read` from tmpfs populated at boot from systemd-creds
+  - [ ] Layer 4 — see T1.4–T1.6, T2.3, T2.7, T2.8 (preventing root compromise is the real defence)
 - [x] Pin GitLab CE version and document the upgrade runbook — `seed.gitlab.version`, threaded through Terraform, `apt-mark hold` in cloud-init; runbook in DESIGN.md §5.6
 
 ### Phase 5b: Findings from Security Review 2026-05-15

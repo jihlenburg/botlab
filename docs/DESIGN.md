@@ -1,6 +1,6 @@
 # ACME Corp GitLab Infrastructure - Master Design Document
 
-**Version**: 2.1
+**Version**: 2.2
 **Last Updated**: 2026-05-15
 **Status**: Draft - Pending Approval
 
@@ -1116,98 +1116,235 @@ systemctl status prometheus alertmanager grafana-server
 journalctl -u prometheus -f
 ```
 
-## Appendix C: Secrets Management with sops + age
+## Appendix C: Layered Secrets Management
 
-The current default keeps `seed.yaml` as a plaintext file on the operator's workstation (chmod 0600, gitignored). For production deployments this should be encrypted with [sops](https://github.com/getsops/sops) keyed to [age](https://age-encryption.org/) recipients. age is a small, modern alternative to GPG with no key-server complications.
+### C.1 Why layered
 
-**One-time setup (per operator):**
+"Encrypt secrets at rest" sounds airtight but on a single-server deployment, encryption at rest mostly protects against **stolen disk** and **backup leak** — it does *not* protect against **root compromise of the running server**. If an attacker gets root, they can read process memory, the kernel keyring, the systemd credentials directory, and any file a running service can read. Encryption at rest cannot prevent that, by definition: the running service must be able to decrypt.
+
+So this appendix decomposes secrets by access pattern and treats each layer separately. The goal isn't "encrypt everything"; it's "minimise what the server needs at runtime, and harden what's unavoidable."
+
+### C.2 The decomposition
+
+| Secret | Read when | Read by | Lives on server? |
+|--------|-----------|---------|------------------|
+| `infrastructure.hetzner.api_token` | `terraform apply` only | Operator workstation | **No.** Laptop only. |
+| Borg full-access key + admin passphrase | Disaster recovery only | Recovery workstation | **No.** Offline recovery kit only. |
+| Operator SSH private keys | Every SSH login | Operator | **No.** Workstation, ideally hardware-token-resident. |
+| Borg encryption passphrase | Hourly backup cron | Backup script on server | **Yes.** Layer 2 protected. |
+| Storage Box append-only SSH key | Hourly backup cron | Backup script on server | **Yes.** Layer 2 protected. |
+| S3 access key + secret | Weekly S3 cron | S3 backup script on server | **Yes.** Layer 2 protected. |
+| `gitlab-secrets.json` | Every GitLab boot + every encrypted-column access | `gitlab-rails` service | **Yes.** Layer 3 protected. |
+| `smtp_password` | Every email sent | `gitlab-rails` service | **Yes.** Layer 3 protected. |
+| Azure AD SAML cert | Every SSO callback | `gitlab-rails` service | **Yes.** Layer 3 protected. |
+
+### C.3 Layer 1 — Eliminate secrets that don't need to be on the server
+
+This is the highest-leverage step and costs nothing in operational complexity.
+
+**`hcloud_token`** is read only during `terraform apply` from the operator workstation. The generated `terraform/terraform.tfvars` is gitignored and never copied to the server. Verify in your runbook that no script ever `scp`s `terraform.tfvars` or the rendered token to the GitLab box. The cloud-init template does not need it; Terraform itself uses it from the laptop.
+
+**Borg full-access key and admin passphrase** live only in the offline recovery kit (USB / safe / password manager). `scripts/setup-borg-append-only.sh` Step 7 securely deletes the on-server copies (`/root/.ssh/storagebox_key` and `/root/.ssh/storagebox_admin_key`) once you confirm the offline copy is verified. **The append-only design is only real once this step runs to completion** — running setup-borg-backup.sh without running setup-borg-append-only.sh through to deletion leaves the server with full Storage Box credentials.
+
+**Per-cron-job GitLab API tokens** are *not* stored in `seed.yaml`. When a future script needs API access (e.g. the weekly restore-test querying the running GitLab), generate a token at the *narrowest* scope it needs (project-level + specific permissions, not global `api` scope), store it via systemd-creds for that one timer's service, and rotate it with the script (a fresh token on every install). A global `gitlab.private_token` field is a false convenience — it grows access rather than scoping it.
+
+**Operator SSH private keys** belong on the operator's workstation only, ideally backed by a hardware token (YubiKey-resident SSH key with PIN + presence). Public halves are uploaded via `infrastructure.ssh.admin_keys.*` in `seed.yaml` — the server only ever sees the public side.
+
+### C.4 Layer 2 — `systemd-creds` with TPM2 binding for unavoidable server-side runtime secrets
+
+For secrets that *must* be readable by something on the server (Borg passphrase, S3 keys), use [`systemd-creds`](https://www.freedesktop.org/software/systemd/man/systemd-creds.html). It encrypts a credential at rest and decrypts it only when loading into a specific service unit's `$CREDENTIALS_DIRECTORY`. With TPM2 binding (PCR-sealed), the encrypted credential is useless on a different machine or after the boot chain is tampered with.
+
+**Preflight**: confirm TPM2 is available on the Hetzner Cloud server:
 
 ```bash
-# Install
-brew install sops age      # macOS
-# or: apt-get install age && go install github.com/getsops/sops/v3/cmd/sops@latest
-
-# Generate an age keypair (private key goes in ~/.config/sops/age/keys.txt)
-age-keygen -o ~/.config/sops/age/keys.txt
-# Public key is printed; share it with other operators who need access
+systemd-creds has-tpm2
+# Expect: yes
+# If "no", credentials still encrypt using a host-bound key in
+# /var/lib/systemd/credential.secret — weaker than TPM2 binding but still
+# better than plaintext (the key is not in any backup we take).
 ```
 
-**Configure sops for this repo** (`.sops.yaml` at repo root):
+**One-time encryption** (run on the GitLab server with operator privileges):
 
-```yaml
+```bash
+# Borg passphrase
+read -s -p "Borg passphrase: " BORG_PASS && echo
+printf '%s' "$BORG_PASS" | sudo systemd-creds encrypt \
+    --name=borg_passphrase \
+    --with-key=auto \
+    --tpm2-pcrs=7+11 \
+    - /etc/credstore.encrypted/borg_passphrase
+unset BORG_PASS
+
+# S3 access key
+read -p "S3 access key: " S3_AK
+printf '%s' "$S3_AK" | sudo systemd-creds encrypt \
+    --name=s3_access_key --with-key=auto --tpm2-pcrs=7+11 \
+    - /etc/credstore.encrypted/s3_access_key
+
+# S3 secret key
+read -s -p "S3 secret key: " S3_SK && echo
+printf '%s' "$S3_SK" | sudo systemd-creds encrypt \
+    --name=s3_secret_key --with-key=auto --tpm2-pcrs=7+11 \
+    - /etc/credstore.encrypted/s3_secret_key
+unset S3_SK
+
+sudo chmod 600 /etc/credstore.encrypted/*
+```
+
+PCRs 7 and 11 mean "Secure Boot state + initrd measurements" — the credential becomes unreadable if either changes (e.g. someone boots a recovery USB to read your disks).
+
+**Consuming the credential** — convert the cron into a systemd timer (this also ticks off TODO T2.3):
+
+```ini
+# /etc/systemd/system/gitlab-backup.service
+[Unit]
+Description=Hourly GitLab backup to Borg
+After=network-online.target gitlab-runsvdir.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+LoadCredentialEncrypted=borg_passphrase
+ExecStart=/usr/local/bin/gitlab-backup-to-borg.sh
+# The script reads via: BORG_PASSPHRASE="$(cat "$CREDENTIALS_DIRECTORY/borg_passphrase")"
+
+# /etc/systemd/system/gitlab-backup.timer
+[Unit]
+Description=Hourly GitLab backup
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target
+```
+
+The Borg passphrase exists in plaintext only inside the backup script's process memory while it runs (typically a few minutes per hour). No other process can read it; no on-disk plaintext copy exists.
+
+**`/etc/gitlab-backup.conf` becomes structural only** — repo URL, key path, retention numbers. No secret material. The `BORG_PASSPHRASE` line is removed; the script gets it from `$CREDENTIALS_DIRECTORY` instead.
+
+### C.5 Layer 3 — GitLab's own runtime secrets (SMTP, SAML, `gitlab-secrets.json`)
+
+GitLab Omnibus reads `/etc/gitlab/gitlab.rb` at every `gitlab-ctl reconfigure` and `/etc/gitlab/gitlab-secrets.json` at every Rails boot. We use two techniques:
+
+**`gitlab.rb`** can read individual values from files using normal Ruby:
+
+```ruby
+gitlab_rails['smtp_password'] = File.read('/run/gitlab-secrets/smtp_password').strip
+gitlab_rails['omniauth_providers'] = [
+  {
+    name: "saml",
+    args: {
+      idp_cert: File.read('/run/gitlab-secrets/saml_idp_cert'),
+      # ... other args ...
+    }
+  }
+]
+```
+
+Populate `/run/gitlab-secrets/` (a tmpfs — never touches disk) at boot from systemd-creds via a oneshot unit that runs before `gitlab-runsvdir.service`:
+
+```ini
+# /etc/systemd/system/gitlab-secrets-populate.service
+[Unit]
+Description=Materialise GitLab runtime secrets from systemd-creds
+DefaultDependencies=no
+After=local-fs.target
+Before=gitlab-runsvdir.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+LoadCredentialEncrypted=smtp_password
+LoadCredentialEncrypted=saml_idp_cert
+ExecStartPre=/usr/bin/mkdir -p /run/gitlab-secrets
+ExecStartPre=/usr/bin/mount -t tmpfs -o size=1m,mode=0700 tmpfs /run/gitlab-secrets
+ExecStart=/bin/sh -c 'cp $CREDENTIALS_DIRECTORY/* /run/gitlab-secrets/ && chmod 600 /run/gitlab-secrets/*'
+
+[Install]
+WantedBy=multi-user.target
+```
+
+**`gitlab-secrets.json`** is the awkward case — GitLab expects it at a fixed path and re-reads it on every reconfigure. Two options:
+
+1. **Pragmatic**: leave it at `/etc/gitlab/gitlab-secrets.json` with `chmod 600 root:root`. Accept that root compromise reveals it. Mitigate root-compromise risk via Layer 4 (below) rather than trying to encrypt this specific file.
+
+2. **Stronger but operationally annoying**: bind-mount `/etc/gitlab/gitlab-secrets.json` from the same tmpfs populated by the unit above. Requires fighting omnibus during upgrades because `gitlab-ctl reconfigure` may rewrite the file. Defer until you have a tested workaround.
+
+We currently recommend (1) and put the energy into Layer 4.
+
+### C.6 Layer 4 — Prevent root compromise (because encryption at rest can't)
+
+Every layer above falls apart under root compromise on the running server. So invest equally in preventing it. The relevant TODO items:
+
+- **T1.4** — `trusted_ssh_ips` required, no wildcard fallback
+- **T1.5** — monitoring stack bound to 127.0.0.1, reached via SSH port-forward
+- **T1.6** — vendor + checksum the GitLab repo install script
+- **T2.3** — `sshd` fail2ban jail (in addition to the GitLab-auth jail)
+- **T2.7** — AIDE file integrity monitoring on `/var/opt/gitlab` and `/etc/gitlab`
+- **T2.8** — break-glass local admin account model documented
+- Disable root SSH; require sudo with logging
+- Configure `unattended-upgrades` for security patches with a controlled reboot window
+
+These do more for your *actual* secrets safety than any amount of encryption-at-rest cleverness.
+
+### C.7 Operator-side: sops + age for `seed.yaml`
+
+`seed.yaml` on the operator's workstation contains every laptop-side secret (`hcloud_token`, the Borg passphrase before you encrypt it on the server, SMTP password, SAML cert, etc.). Encrypt it with [sops](https://github.com/getsops/sops) + [age](https://age-encryption.org/):
+
+```bash
+# One-time per operator
+age-keygen -o ~/.config/sops/age/keys.txt        # writes private key; prints public key
+# Share the public key with other operators who need access
+
+# Configure sops for this repo (.sops.yaml at repo root)
+cat > .sops.yaml <<'EOF'
 creation_rules:
   - path_regex: ^seed\.yaml$
     age: >-
-      age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aq0wp6j2,
-      age1lggyhqrw2nlhcxprm67z43rta597azn8gknawjehu9d9dl0jq3yqqvfafg
-```
+      age1<operator-1-public-key>,
+      age1<operator-2-public-key>
+EOF
 
-List every operator's age **public** key in the `age:` line.
-
-**Encrypt your seed**:
-
-```bash
+# Encrypt the seed in place
 sops --encrypt --in-place seed.yaml
-# Now seed.yaml is encrypted in place. Safe to commit, keep on USB, etc.
-# (Still gitignored by default — opt in deliberately if you decide to commit it.)
-```
 
-**Edit the encrypted seed**:
+# Edit it: decrypts to $EDITOR, re-encrypts on save
+sops seed.yaml
 
-```bash
-sops seed.yaml             # decrypts in $EDITOR, re-encrypts on save
-```
-
-**Use at deploy time**:
-
-```bash
-# Decrypt to stdout (no plaintext file on disk)
-sops --decrypt seed.yaml > /tmp/seed.plain.yaml
-python scripts/seed_bootstrap.py /tmp/seed.plain.yaml --target all
-shred -u /tmp/seed.plain.yaml
-```
-
-Or, with sops's `exec-file` to avoid the temp file entirely:
-
-```bash
+# Use at deploy time without leaving plaintext on disk
 sops exec-file --no-fifo seed.yaml \
   'python scripts/seed_bootstrap.py {} --target all'
 ```
 
-**For server-side secrets** (`/etc/gitlab/gitlab.rb`, `/etc/gitlab-backup.conf`, `/etc/gitlab-s3-backup.conf`):
+The encrypted `seed.yaml` is safe to keep on USB drives, in password managers, or even (controversially) committed to the repo. We default to gitignoring it because committing-encrypted-things is a choice you should make deliberately.
 
-These currently end up plaintext on disk. Two options to harden:
+### C.8 Credential rotation cadence
 
-1. **`systemd-creds`** (simplest, ships with systemd 250+):
-   ```bash
-   # Encrypt a credential
-   echo "$BORG_PASSPHRASE" | systemd-creds encrypt - /etc/credstore.encrypted/borg_passphrase
-   # In the unit file:
-   #   LoadCredentialEncrypted=borg_passphrase
-   # Inside the script, read from $CREDENTIALS_DIRECTORY/borg_passphrase
-   ```
+| Secret | Cadence | How |
+|--------|---------|-----|
+| Borg encryption passphrase | 12 months OR operator turnover | `borg key change-passphrase` on recovery workstation; update offline kit; re-encrypt with systemd-creds on server |
+| Storage Box append-only SSH key | 12 months OR after suspected compromise | regenerate; update Hetzner Robot sub-account; re-deploy |
+| Storage Box full-access SSH key | 24 months OR operator turnover | regenerate; update offline kit; never on server |
+| `hcloud_token` | 6 months OR operator turnover | Hetzner Cloud console → rotate; update seed.yaml |
+| GitLab per-script API tokens | At each script install | scripted; generate fresh on every install |
+| SMTP password | 12 months | rotate at provider; update seed; re-encrypt via systemd-creds |
+| Azure AD SAML cert | per Azure cert lifetime | follow Azure AD rotation procedure; update seed |
+| SSH host keys | OS reinstall only | OS-managed |
+| Operator SSH keys | per operator policy | operator responsibility; hardware tokens preferred |
 
-2. **sops on the server** (more flexible, requires an age key on the server):
-   - Generate an age key on the server, keep its **private** half on the box only
-   - Encrypt `gitlab-backup.conf` with sops keyed to that age recipient
-   - Decrypt on demand in `/usr/local/bin/gitlab-backup-to-borg.sh`:
-     ```bash
-     eval "$(sops --decrypt /etc/gitlab-backup.conf.sops)"
-     ```
-   - The trade-off: a server-resident age key is still on the box, just not next to the secret. Better than plaintext, weaker than a real HSM.
+Track "last rotated" dates either in `seed.yaml` as comments next to each value or in a separate `docs/CREDENTIAL-LEDGER.md`. The point is that *somewhere* records when each credential was last touched.
 
-**Key rotation** (Borg passphrase):
+### C.9 What this appendix deliberately rejects
 
-```bash
-# On the recovery workstation with full-access key loaded
-borg key change-passphrase "$BORG_REPO"
-# Update seed.yaml, re-render /etc/gitlab-backup.conf on the server,
-# update the offline kit, document the rotation date.
-```
-
-Recommended rotation cadence: every 12 months, or immediately after any operator with knowledge of the key leaves the team.
-
-**What this appendix deliberately doesn't recommend**: HashiCorp Vault. It's the right tool for a 50-server fleet, not for a single GitLab box. The operational overhead (HA Vault cluster, unsealing, audit log integration) exceeds the security benefit at this scale.
+- **HashiCorp Vault**: the right tool for 50+ servers, not for a single GitLab box. The operational overhead (HA cluster, unsealing, audit log integration, network dependency on every secret read) exceeds the security benefit at this scale.
+- **Cloud KMS** (AWS/GCP/Azure): introduces vendor concentration we've explicitly designed against. Network round-trip for every secret read. Adds a credential to access the credential store.
+- **Hardware HSM** (YubiHSM2, etc.): meaningful for signing keys; doesn't help with password-shaped secrets. Wrong fit.
+- **Manual passphrase unseal at boot**: incompatible with the ~99% uptime target and unattended-upgrades reboots.
+- **Clevis + Tang**: requires running a Tang server somewhere reachable at boot. The external observer (§7.5) could double as Tang, but its compromise then releases all our keys. Defers the problem.
 
 ---
 
@@ -1231,3 +1368,4 @@ Recommended rotation cadence: every 12 months, or immediately after any operator
 | 1.3 | 2026-02-02 | Claude Code | Added multi-repository policy system (Section 7.8), per-project .gitlab-bot.yml |
 | 2.0 | 2026-05-12 | Claude Code | Dropped the Admin Bot and the (planned) LLM-driven Integrator Bot. Monitoring/automation replaced by Prometheus + Alertmanager + cron on the GitLab server. Removed the dedicated admin-bot CX32 instance from infrastructure (~7 EUR/month savings). Removed Section 7.8 (per-repo bot policies). |
 | 2.1 | 2026-05-15 | Claude Code | Pinned GitLab version (new §5.6 upgrade runbook); added §7.5 external dead-man's-switch observer; reconciled backup retention numbers (12-month monthlies everywhere); fixed cloud-init backup script to honour `/etc/gitlab-backup.conf`. Extracted DR steps to `RUNBOOK-RECOVERY.md`; added first-deploy `DEPLOY.md`; added Appendix C (sops + age secrets management); shipped starter `monitoring/alerts.yml` including the `Watchdog` dead-man alert. |
+| 2.2 | 2026-05-15 | Claude Code | Rewrote Appendix C as **Layered Secrets Management** (Layer 1 server-side elimination → Layer 2 systemd-creds + TPM2 → Layer 3 GitLab runtime via tmpfs → Layer 4 root-compromise prevention). Removed unused `gitlab.private_token` from seed schema. Added DEPLOY.md §2a clarifying which secret belongs where. Closed Security Review finding T1.1a: `setup-borg-append-only.sh` now securely shreds the full-access SSH keys (with operator confirmation) instead of leaving them on disk with manual cleanup instructions. |

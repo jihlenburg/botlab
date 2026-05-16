@@ -71,9 +71,13 @@ class InfrastructureConfig(BaseModel):
 
 class GitLabConfig(BaseModel):
     domain: str
-    private_token: str
     # Pinned apt package version (e.g. "17.10.0-ce.0"). See seed.example.yaml.
     version: str = "17.10.0-ce.0"
+    # NOTE: a global `private_token` field was deliberately removed in v2.2.
+    # Per-cron-job tokens should be generated on demand against the live
+    # GitLab API with the narrowest scope they need, then stored via
+    # systemd-creds for the specific timer that uses them. See DESIGN.md
+    # Appendix C ("Layered Secrets Management") for the pattern.
 
 
 class StorageBoxConfig(BaseModel):

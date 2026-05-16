@@ -66,7 +66,6 @@ Specifically, you need:
 - [ ] `infrastructure.ssh.admin_keys.<your-name>` — paste your `~/.ssh/id_ed25519.pub`
 - [ ] `infrastructure.ssh.trusted_ips` — your office/VPN CIDR (do not leave empty in production)
 - [ ] `gitlab.domain` — e.g. `gitlab.yourcompany.com`
-- [ ] `gitlab.private_token` — generate **after** GitLab is up, leave the placeholder for now if you have to (the validator will fail; just come back later)
 - [ ] `gitlab.version` — pinned package version, e.g. `17.10.0-ce.0` (browse https://packages.gitlab.com/gitlab/gitlab-ce for current options)
 - [ ] `backup.storage_box.*` — from step 1
 - [ ] `backup.borg.passphrase` — generate fresh, 20+ chars (e.g. `openssl rand -base64 32`). **Record offline immediately.**
@@ -74,6 +73,21 @@ Specifically, you need:
 - [ ] `alerting.email.*` — SMTP creds for Alertmanager
 
 **Lock down `seed.yaml` now**: it is gitignored, but it lives on your disk. At minimum: `chmod 600 seed.yaml`. Recommended: encrypt with `sops + age` per DESIGN.md Appendix C and remove the plaintext copy.
+
+### 2a. Know where each secret should live
+
+Per the layered approach in DESIGN.md Appendix C, secrets are NOT treated uniformly. Memorise this table — every secret in `seed.yaml` falls into exactly one row:
+
+| Secret | Where it lives in normal operation | What you do |
+|--------|-----------------------------------|-------------|
+| `infrastructure.hetzner.api_token` | Operator laptop only (in encrypted `seed.yaml` and the gitignored `terraform.tfvars`) | **Never copy to the server.** Terraform runs from your laptop. |
+| `infrastructure.ssh.admin_keys.*` (public halves) | Server `authorized_keys` via cloud-init | Public keys; private halves stay on operators' workstations (ideally on a hardware token). |
+| `backup.borg.passphrase` | Server `/etc/gitlab-backup.conf` until Layer 2 is implemented, then under `systemd-creds` | This is the only laptop secret that has to live on the server. Plan to migrate it under systemd-creds in Phase 5. |
+| `backup.s3.*` (access/secret) | Server `/etc/gitlab-s3-backup.conf` until Layer 2 | Same as above. |
+| `alerting.email.smtp_password` | Server `/etc/gitlab/gitlab.rb` until Layer 2 | Same as above. |
+| **Borg full-access SSH key + admin passphrase** | **OFFLINE recovery kit only** | Never on the server after `setup-borg-append-only.sh` finishes. The script will prompt and securely delete the on-server copies. |
+
+The rule of thumb: **if a script on the server doesn't need to read it at 03:00 on a Tuesday, it should not be on the server.**
 
 Generate downstream configs:
 

@@ -38,12 +38,21 @@ These risks the design explicitly accepts. They are revisited only when the unde
 
 ### T1 — Fix sooner
 
-**T1.1 — Plaintext secrets on disk**
-- *Current state*: Borg passphrase in `/etc/gitlab-backup.conf`, S3 creds in `/etc/gitlab-s3-backup.conf`, SMTP password in `/etc/gitlab/gitlab.rb`, `hcloud_token` in `terraform/terraform.tfvars`. `seed.yaml` itself is plaintext on the operator's laptop.
-- *Blast radius*: any unauthorised filesystem read on the GitLab server → instant backup-destination access (read), SMTP relay (send-as), and ability to inject poisoned archives. Operator-laptop compromise → entire infrastructure.
-- *Recommendation*: implement DESIGN.md Appendix C (sops + age) for `seed.yaml`. For server-side configs, use `systemd-creds` to load `BORG_PASSPHRASE` and AWS keys at unit-start time so they exist only in process memory.
-- *TODO.md*: already tracked (Phase 5 Security Hardening).
-- *Target*: before first production traffic.
+**T1.1 — Plaintext secrets on disk** *(status: Layer 1 closed 2026-05-15; Layers 2 & 3 pending)*
+- *Original state*: Borg passphrase in `/etc/gitlab-backup.conf`, S3 creds in `/etc/gitlab-s3-backup.conf`, SMTP password in `/etc/gitlab/gitlab.rb`, `hcloud_token` in `terraform/terraform.tfvars`. `seed.yaml` itself plaintext on the operator's laptop. `gitlab.private_token` field in seed schema that was unused but invited future misuse.
+- *Blast radius*: filesystem read on the GitLab server → instant backup-destination access (read), SMTP relay (send-as), poisoned-archive injection. Operator-laptop compromise → entire infrastructure.
+- *Recommendation*: layered approach in DESIGN.md Appendix C (Layers 1-4) replaces the original sops-only framing.
+- *Layer 1 closed (this review)*:
+  - Removed unused `gitlab.private_token` field from `seed_schema.py` and `seed.example.yaml`. Pattern documented in Appendix C.3: per-cron-job tokens generated on demand at narrowest scope.
+  - Documented in DEPLOY.md §2a which secret belongs where. "If a script on the server doesn't need to read it at 03:00 on a Tuesday, it should not be on the server."
+  - Verified `hcloud_token` is laptop-only (terraform runs from the laptop; the rendered `terraform.tfvars` is gitignored and never copied to the server).
+- *Layer 2 pending (TODO.md Phase 5)*: `systemd-creds` with TPM2 binding for Borg passphrase + S3 keys. Cron migrated to systemd timers as part of the same change.
+- *Layer 3 pending (TODO.md Phase 5)*: GitLab runtime secrets (SMTP password, SAML cert) moved to `File.read` from tmpfs populated by a boot-time oneshot from systemd-creds.
+
+**T1.1a — Full-access SSH keys left on disk after "append-only" hardening** *(new finding, closed 2026-05-15)*
+- *Discovered during Layer 1 implementation.* `setup-borg-backup.sh` creates `/root/.ssh/storagebox_key` (full Storage Box access). `setup-borg-append-only.sh` later adds a separate `storagebox_admin_key` (also full access) and switches the config to use a third, append-only key — but it leaves both full-access keys on disk and merely tells the operator to delete them manually.
+- *Blast radius*: any root compromise of the GitLab server retains full Storage Box access (delete archives, defeating ransomware protection). The append-only design was effectively decorative until the operator remembered to run the manual `rm`.
+- *Fixed*: `setup-borg-append-only.sh` Step 7 now prompts for confirmation ("type DELETE") and uses `shred -u` to securely remove both full-access keys (`storagebox_key` and `storagebox_admin_key`) once the operator confirms the offline copy is verified. If the operator declines, the script prints the exact `shred` commands to run manually and warns that append-only protection is incomplete.
 
 **T1.2 — Terraform state lives on operator laptop**
 - *Current state*: `terraform.tfstate` is local; loss of laptop = loss of state = inability to do partial `terraform apply` during DR.
