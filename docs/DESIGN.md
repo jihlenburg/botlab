@@ -484,7 +484,7 @@ We mitigate this with a **single local-auth admin account** used only for SSO re
 | Username | Non-obvious (e.g. `recovery-${random6}`) — recorded ONLY in the offline kit, never in this document or in `seed.yaml` |
 | Email | `break-glass-${random}@<your-local-domain>` — must NOT match any Azure AD identity (prevents accidental SSO auto-link) |
 | Password | 32+ chars, generated with `openssl rand -base64 24`. Stored in offline kit. |
-| 2FA | TOTP enabled at creation. TOTP seed + 10 backup codes stored in offline kit. (Not WebAuthn — a physical hardware token cannot be assumed present during recovery; the offline kit is the only thing we guarantee is reachable.) |
+| 2FA | TOTP enabled at creation. TOTP secret seed + 10 backup codes stored in offline kit. (Not WebAuthn — a physical hardware token cannot be assumed present during recovery; the offline kit is the only thing we guarantee is reachable.) Any standard RFC 6238 TOTP app works for routine use (Apple Passwords, 1Password, Bitwarden, Aegis, Google Authenticator, etc.) — but the **authoritative source of truth is the seed in the offline kit**, not the app. The app is a convenience overlay; if it (or the Apple/1Password/etc. account behind it) is unavailable, you re-seed any TOTP app from the offline kit. |
 | Admin level | GitLab Administrator |
 | State in normal operation | Active but unused. Any login generates a critical alert. |
 
