@@ -1,6 +1,8 @@
 # GitLab Infrastructure Project - TODO List
 
-**Last Updated**: 2026-05-12
+**Last Updated**: 2026-05-15
+**Last security review**: 2026-05-15 — see `docs/SECURITY-REVIEW-2026-05-15.md`
+**Next baseline security review due**: 2026-08-15 (quarterly check) / 2027-05-15 (annual)
 
 ---
 
@@ -87,7 +89,30 @@
 - [ ] Configure fail2ban on the GitLab server (currently set up in cloud-init — verify in prod)
 - [ ] Adopt sops/age (or systemd-creds) for secrets on disk, replacing plaintext in `/etc/gitlab/gitlab.rb` and `/etc/gitlab-backup.conf` (see DESIGN.md Appendix C for the documented approach)
 - [x] Pin GitLab CE version and document the upgrade runbook — `seed.gitlab.version`, threaded through Terraform, `apt-mark hold` in cloud-init; runbook in DESIGN.md §5.6
-- [ ] Security audit of configurations
+
+### Phase 5b: Findings from Security Review 2026-05-15
+
+See `docs/SECURITY-REVIEW-2026-05-15.md` for full context. Items grouped by tier.
+
+**T1 — fix sooner:**
+
+- [ ] **T1.2** Configure remote Terraform state backend (Hetzner Object Storage, encrypted); also snapshot state into offline recovery kit
+- [ ] **T1.3** Define recovery-workstation profile in `docs/RUNBOOK-RECOVERY.md` (dedicated machine OR live-USB, FDE, network isolation when not recovering)
+- [ ] **T1.4** Make `trusted_ssh_ips` a required Terraform variable with no default (fail-loud instead of silent open-SSH)
+- [ ] **T1.5** Document monitoring stack exposure & auth model in DESIGN.md §7 (bind to 127.0.0.1, SSH port-forward access; Grafana admin pwd from seed; Alertmanager API auth; external observer webhook auth)
+- [ ] **T1.6** Vendor the GitLab repo install script (`scripts/install-gitlab-repo.sh`) with CI checksum verification; have cloud-init run the vendored copy instead of `curl ... | bash`
+
+**T2 — should fix:**
+
+- [ ] **T2.2** Document GitLab CVE monitoring/patching cadence in DESIGN.md §5.6 (subscribe to GitLab security advisories; patch criticals within published window)
+- [ ] **T2.3** Add `sshd` fail2ban jail to cloud-init
+- [ ] **T2.4** TLS hardening in `gitlab.rb`: Mozilla Intermediate ciphers, OCSP stapling, document HSTS preload submission in DEPLOY.md
+- [ ] **T2.5** Confirm/configure LB sticky-session cookie flags (`Secure; HttpOnly; SameSite=Lax`)
+- [ ] **T2.6** Credential rotation matrix in DESIGN.md Appendix C (hcloud_token, GitLab PAT, SAML cert, SMTP password, SSH host keys, operator SSH keys)
+- [ ] **T2.7** AIDE file-integrity monitoring in cloud-init; nightly cron + Prometheus textfile metric; re-baseline as part of upgrade runbook
+- [ ] **T2.8** Document break-glass local admin account in DESIGN.md §5 and RUNBOOK-RECOVERY.md (2FA enabled, backup codes in offline kit, never used except for SSO recovery)
+
+**T3 — hardening polish backlog** (work after T1/T2 closed): commit signing decision, SBOM/signature spot-checks, LFS pre-signed URL TTL, log retention policy, annual security tabletop exercise, `SECURITY.md` responsible-disclosure path, verify gitleaks runs in CI not just pre-commit.
 
 ### Phase 6: Future Enhancements (Priority: LOW)
 

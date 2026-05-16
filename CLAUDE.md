@@ -40,6 +40,38 @@ Skip the devil's-advocate pass for trivial requests (typo fixes, renames, mechan
 
 This is a working-style preference, not a license for contrarianism. Do not manufacture objections when there genuinely aren't any.
 
+## Security-First Mindset
+
+Security is a first-class concern in every design and implementation decision — considered explicitly, not bolted on. Apply this stance:
+
+- **Conservative defaults**: closed firewall, encrypted at rest, least privilege, audit logged, deny-by-default.
+- **Surface security implications prominently** in any plan; never hide them in a footnote.
+- **Don't defer hardening**. "We'll fix it later" is usually a lie — call it out and add it to TODO.md with an owner and a date.
+- **Make trade-offs explicit**. When security trades against cost, usability, or availability, document the trade-off rather than silently picking one side.
+- **Treat the threat model as living**. When a new component is added or changed, walk through how it would be attacked before declaring the design done.
+- **Reject security theater**. Prefer real reductions in attack surface or blast radius over checkbox compliance.
+
+This is the spirit of "security first" without absolutism — see the devil's-advocate guidance above for how to weigh security against the project's other constraints (~63 EUR/mo, single operator, open source only, ~1h RPO / 1-2h RTO).
+
+## Security Reviews
+
+Two complementary modes — both apply.
+
+**Event-triggered reviews** (do these whenever the trigger fires):
+
+- **New component or dependency added** → walk the threat model before merging.
+- **Incident or near-miss** (any severity) → post-incident review focused on structural gaps, not blame.
+- **CVE in the stack** (GitLab CE, Borg, OS packages, exporters, supporting tools) → assess applicability and patch within the GitLab security release window.
+- **Operator joins or leaves** → rotate every credential they had access to; update the offline recovery kit.
+- **Major version bump in `docs/DESIGN.md`** (e.g. v2.x → v3.0) → full re-review of the threat model, risk matrix, and accepted risks.
+
+**Periodic baseline reviews** (calendar-driven, regardless of triggers):
+
+- **Annually** — full re-read of `docs/SECURITY-ASSESSMENT.md` + threat model + edge-case table + accepted risks. Produce a dated artifact `docs/SECURITY-REVIEW-YYYY-MM-DD.md`.
+- **Quarterly** — verify the offline recovery kit is readable, credentials haven't drifted from `seed.yaml`, the last weekly restore-test actually ran, and no Tier 1/Tier 2 findings from the last review are unaddressed past their target dates.
+
+**Cross-session continuity**: track "Last security review: YYYY-MM-DD" in `TODO.md`. When opening a session, if the last review is more than a quarter old or a triggering event has occurred since, proactively offer to run one before doing other work.
+
 ## Architecture Summary
 
 ```

@@ -11,10 +11,12 @@
 | Document | Relationship |
 |----------|--------------|
 | [DESIGN.md](DESIGN.md) | Master design document - implements recommendations from this assessment |
+| `SECURITY-REVIEW-YYYY-MM-DD.md` | Dated security-review artifacts (produced per the cadence in `CLAUDE.md`). Most recent: [2026-05-15](SECURITY-REVIEW-2026-05-15.md). |
 
 **Implementation Status**: Recommendations from this assessment are incorporated into:
 - DESIGN.md Section 6.3.3 (3-2-1 Backup Strategy)
 - DESIGN.md Section 9 (Ransomware Protection)
+- New findings since this document was last revised live in the most-recent `SECURITY-REVIEW-*.md` and the corresponding TODO.md entries.
 
 **Scope note (v2.0)**: The earlier "Admin Bot" and the planned LLM-driven "Integrator Bot" were removed from the architecture. Monitoring, alerting, and scheduled jobs are now handled by Prometheus + Alertmanager + cron on the GitLab server itself. References to bot-driven detection or DR orchestration in earlier versions have been updated accordingly.
 
