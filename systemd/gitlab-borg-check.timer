@@ -1,0 +1,13 @@
+[Unit]
+Description=Weekly Borg repository integrity check
+Documentation=file:///opt/botlab/systemd/README.md
+
+[Timer]
+# Sundays at 04:00 local time — after restore-test (02:00), before normal
+# Monday-morning activity.
+OnCalendar=Sun *-*-* 04:00:00
+RandomizedDelaySec=900
+Persistent=true
+
+[Install]
+WantedBy=timers.target

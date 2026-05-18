@@ -21,21 +21,6 @@ output "gitlab_server_private_ip" {
   value       = var.gitlab_private_ip
 }
 
-output "admin_bot_server_id" {
-  description = "ID of the Admin Bot server"
-  value       = hcloud_server.admin_bot.id
-}
-
-output "admin_bot_public_ip" {
-  description = "Public IPv4 address of Admin Bot server"
-  value       = hcloud_server.admin_bot.ipv4_address
-}
-
-output "admin_bot_private_ip" {
-  description = "Private IP address of Admin Bot server"
-  value       = var.admin_bot_private_ip
-}
-
 # -----------------------------------------------------------------------------
 # Load Balancer Information
 # -----------------------------------------------------------------------------
@@ -79,20 +64,6 @@ output "gitlab_backups_volume_id" {
 }
 
 # -----------------------------------------------------------------------------
-# SSH Keys
-# -----------------------------------------------------------------------------
-
-output "admin_bot_ssh_private_key_file" {
-  description = "Path to Admin Bot SSH private key"
-  value       = local_sensitive_file.admin_bot_private_key.filename
-}
-
-output "admin_bot_ssh_public_key" {
-  description = "Admin Bot SSH public key"
-  value       = tls_private_key.admin_bot.public_key_openssh
-}
-
-# -----------------------------------------------------------------------------
 # DNS Configuration Instructions
 # -----------------------------------------------------------------------------
 
@@ -119,13 +90,10 @@ output "dns_configuration" {
 # -----------------------------------------------------------------------------
 
 output "connection_instructions" {
-  description = "How to connect to the servers"
+  description = "How to connect to the server"
   value       = <<-EOT
     # SSH to GitLab server:
     ssh root@${hcloud_server.gitlab_primary.ipv4_address}
-
-    # SSH to Admin Bot server:
-    ssh root@${hcloud_server.admin_bot.ipv4_address}
 
     # GitLab URL (after DNS configured):
     https://${var.domain}

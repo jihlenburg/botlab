@@ -36,6 +36,12 @@ variable "admin_email" {
   default     = "admin@example.com"
 }
 
+variable "gitlab_version" {
+  description = "Pinned GitLab CE apt package version (e.g. 17.10.0-ce.0). See docs/DESIGN.md §5.6 for the upgrade runbook."
+  type        = string
+  default     = "17.10.0-ce.0"
+}
+
 # =============================================================================
 # Server Configuration
 # =============================================================================
@@ -44,12 +50,6 @@ variable "gitlab_server_type" {
   description = "Hetzner server type for GitLab primary"
   type        = string
   default     = "cpx31"
-}
-
-variable "admin_bot_server_type" {
-  description = "Hetzner server type for Admin Bot"
-  type        = string
-  default     = "cx32"
 }
 
 variable "server_image" {
@@ -96,12 +96,6 @@ variable "gitlab_private_ip" {
   default     = "10.0.1.10"
 }
 
-variable "admin_bot_private_ip" {
-  description = "Private IP for Admin Bot server"
-  type        = string
-  default     = "10.0.1.30"
-}
-
 # =============================================================================
 # SSH Configuration
 # =============================================================================
@@ -113,7 +107,7 @@ variable "ssh_public_keys" {
 }
 
 variable "trusted_ssh_ips" {
-  description = "List of trusted IPs for SSH access to admin bot"
+  description = "List of CIDRs allowed to SSH to the GitLab server. Leave empty to allow SSH from anywhere (NOT recommended)."
   type        = list(string)
   default     = []
 }

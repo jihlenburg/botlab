@@ -1,0 +1,19 @@
+[Unit]
+Description=Hourly GitLab backup to Borg
+Documentation=file:///usr/local/bin/gitlab-backup-to-borg.sh
+Documentation=file:///opt/botlab/docs/DESIGN.md
+After=network-online.target gitlab-runsvdir.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+LoadCredentialEncrypted=borg_passphrase
+ExecStart=/usr/local/bin/gitlab-backup-to-borg.sh
+# Backup runs may take a while; cap at 90 min to catch hangs without
+# starving the next hourly slot.
+TimeoutStartSec=90min
+Nice=10
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=multi-user.target

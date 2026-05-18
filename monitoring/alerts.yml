@@ -1,0 +1,250 @@
+# Prometheus alert rules for the ACME GitLab infrastructure.
+#
+# Load by referencing this file from prometheus.yml:
+#     rule_files:
+#       - /etc/prometheus/alerts.yml
+#
+# Metrics emitted by cron scripts via the node_exporter textfile collector are
+# documented inline below. See docs/DESIGN.md §7 for the full monitoring story.
+
+groups:
+  - name: gitlab-availability
+    interval: 30s
+    rules:
+      - alert: GitLabDown
+        expr: probe_success{job="gitlab-health"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "GitLab /-/health is failing"
+          description: "blackbox_exporter has been unable to probe GitLab /-/health for 2 minutes."
+          runbook: "docs/RUNBOOK-RECOVERY.md"
+
+      - alert: SSLExpiringSoon
+        expr: probe_ssl_earliest_cert_expiry - time() < 30 * 24 * 3600
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "TLS certificate for {{ $labels.instance }} expires in < 30 days"
+
+      - alert: SSLExpiringCritical
+        expr: probe_ssl_earliest_cert_expiry - time() < 7 * 24 * 3600
+        for: 1h
+        labels:
+          severity: critical
+        annotations:
+          summary: "TLS certificate for {{ $labels.instance }} expires in < 7 days"
+
+  - name: gitlab-host
+    interval: 1m
+    rules:
+      - alert: DiskSpaceLow
+        expr: |
+          node_filesystem_avail_bytes{mountpoint="/var/opt/gitlab"}
+          / node_filesystem_size_bytes{mountpoint="/var/opt/gitlab"} < 0.20
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "GitLab data volume < 20% free"
+
+      - alert: DiskSpaceCritical
+        expr: |
+          node_filesystem_avail_bytes{mountpoint="/var/opt/gitlab"}
+          / node_filesystem_size_bytes{mountpoint="/var/opt/gitlab"} < 0.10
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "GitLab data volume < 10% free"
+
+      - alert: MemoryHigh
+        expr: |
+          (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) > 0.80
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Memory utilisation > 80% on {{ $labels.instance }}"
+
+      - alert: MemoryCritical
+        expr: |
+          (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) > 0.95
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Memory utilisation > 95% on {{ $labels.instance }}"
+
+      - alert: CPUSustainedHigh
+        expr: |
+          (1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[15m]))) > 0.70
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "CPU load > 70% sustained for 15m on {{ $labels.instance }}"
+
+      - alert: CPUCritical
+        expr: |
+          (1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m]))) > 0.90
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "CPU load > 90% sustained for 5m on {{ $labels.instance }}"
+
+  - name: gitlab-backups
+    interval: 1m
+    rules:
+      # gitlab_backup_last_success_timestamp must be emitted by the hourly
+      # backup script via the node_exporter textfile collector.
+      # Phase 4 prerequisite: the hourly backup script (currently in
+      # terraform/templates/gitlab-cloud-init.yaml as
+      # /usr/local/bin/gitlab-backup-to-borg.sh) must be augmented to
+      # write this metric, AND the node_exporter textfile collector
+      # must be enabled with --collector.textfile.directory set.
+      # See DEPLOY.md §7 for the Phase 4 monitoring rollout.
+      - alert: BackupOverdueWarn
+        expr: time() - gitlab_backup_last_success_timestamp > 2 * 3600
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Most recent successful Borg backup is > 2 hours old"
+
+      - alert: BackupOverdueCritical
+        expr: time() - gitlab_backup_last_success_timestamp > 4 * 3600
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Most recent successful Borg backup is > 4 hours old (RPO breach)"
+          runbook: "Check /var/log/gitlab-backup.log and Storage Box reachability."
+
+      # gitlab_backup_integrity is set to 1 by the weekly `borg check` cron
+      # (0 on failure). Emitted by scripts/borg-check.sh via the
+      # node_exporter textfile collector. If the metric is absent for > 8
+      # days, the cron itself has stopped running.
+      # Phase 4 prerequisite: scripts/borg-check.sh must be scheduled via
+      # the systemd unit at systemd/gitlab-borg-check.{service,timer} AND
+      # the node_exporter textfile collector must be enabled.
+      - alert: BorgIntegrityFail
+        expr: gitlab_backup_integrity == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Weekly `borg check` reported repository corruption"
+          runbook: "Verify the immutable S3 copy is intact before any restore attempt."
+
+      - alert: BorgCheckStale
+        expr: absent_over_time(gitlab_backup_integrity[8d])
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Weekly `borg check` has not run in over 8 days"
+
+      # gitlab_restore_test_success is emitted by scripts/restore-test.sh
+      # via the node_exporter textfile collector. Phase 4 prerequisite:
+      # scripts/restore-test.sh scheduled via
+      # systemd/gitlab-restore-test.{service,timer} AND the
+      # node_exporter textfile collector enabled.
+      - alert: RestoreTestFail
+        expr: gitlab_restore_test_success == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Weekly automated restore test FAILED"
+          runbook: "Backups are in question. See docs/RUNBOOK-RECOVERY.md and investigate before next restore-test cycle."
+
+      - alert: RestoreTestStale
+        expr: absent_over_time(gitlab_restore_test_success[8d])
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Weekly restore-test has not run in over 8 days"
+
+  - name: gitlab-auth
+    interval: 1m
+    rules:
+      # Fires on any login by the break-glass account. Real SSO outage:
+      # the operator who used it sees their own alert and confirms.
+      # Anyone else using it: critical incident, rotate the break-glass
+      # credentials and audit access to the offline kit.
+      #
+      # METRIC SOURCE GAP: gitlab_break_glass_login_total does not exist
+      # yet. It depends on a GitLab audit-log → Prometheus bridge that's
+      # tracked in TODO.md as T2.8a. The alert rule is committed in
+      # advance so the wiring has an unambiguous target.
+      - alert: BreakGlassLoginUsed
+        expr: increase(gitlab_break_glass_login_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Break-glass admin account login detected"
+          description: "If this is you (real SSO outage), confirm and move on. If not, treat as a compromise: rotate break-glass credentials immediately and audit offline-kit access."
+          runbook: "docs/RUNBOOK-RECOVERY.md Appendix D"
+
+      # Emitted by scripts/verify-break-glass.sh via the textfile collector.
+      # Account missing = current SSO config could lock everyone out.
+      - alert: BreakGlassAccountMissing
+        expr: gitlab_break_glass_account_present == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Break-glass admin account is MISSING from GitLab"
+          description: "The account scripts/verify-break-glass.sh checks for does not exist. Either it was deleted (attack? deploy mistake?) or the kit's username doesn't match reality. Investigate immediately — with auto-redirect SSO enabled, an Azure AD outage now means total lockout."
+          runbook: "docs/RUNBOOK-RECOVERY.md Appendix D §D.6"
+
+      # Quarterly verification cadence enforcement. Warn after 100 days,
+      # critical after 180. The verify script updates the timestamp on
+      # success; if the script stops running or starts failing, this fires.
+      - alert: BreakGlassKitVerificationStale
+        expr: time() - gitlab_break_glass_kit_verified_timestamp > 100 * 24 * 3600
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Break-glass kit verification > 100 days old"
+          description: "Run scripts/verify-break-glass.sh AND do a real login via the bypass URL from the offline kit. Quarterly cadence has slipped."
+
+      - alert: BreakGlassKitVerificationCritical
+        expr: time() - gitlab_break_glass_kit_verified_timestamp > 180 * 24 * 3600
+        for: 1h
+        labels:
+          severity: critical
+        annotations:
+          summary: "Break-glass kit verification > 180 days old"
+          description: "Kit may have rotted (TOTP drift, lost backup codes, forgotten password). Verify NOW before you need it for real."
+
+      # Sanity: if the verification metric is absent entirely, the
+      # verify script has stopped running.
+      - alert: BreakGlassVerifyScriptNotRunning
+        expr: absent_over_time(gitlab_break_glass_kit_verified_timestamp[40d])
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "scripts/verify-break-glass.sh has not produced metrics in 40+ days"
+          description: "Check the systemd timer or cron entry for verify-break-glass.sh."
+
+  - name: dead-mans-switch
+    interval: 1m
+    rules:
+      # This alert is INTENDED to fire constantly. An external observer
+      # (see docs/DESIGN.md §7.5) watches for its absence and alerts when
+      # Alertmanager itself stops dispatching. Do NOT silence or remove it.
+      - alert: Watchdog
+        expr: vector(1)
+        labels:
+          severity: none
+        annotations:
+          summary: "Watchdog — fires constantly. External observer alerts on absence."

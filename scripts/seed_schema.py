@@ -44,7 +44,6 @@ class ServerSpec(BaseModel):
 
 class ServersConfig(BaseModel):
     gitlab: ServerSpec
-    admin_bot: ServerSpec
 
 
 class NetworkConfig(BaseModel):
@@ -72,7 +71,13 @@ class InfrastructureConfig(BaseModel):
 
 class GitLabConfig(BaseModel):
     domain: str
-    private_token: str
+    # Pinned apt package version (e.g. "17.10.0-ce.0"). See seed.example.yaml.
+    version: str = "17.10.0-ce.0"
+    # NOTE: a global `private_token` field was deliberately removed in v2.2.
+    # Per-cron-job tokens should be generated on demand against the live
+    # GitLab API with the narrowest scope they need, then stored via
+    # systemd-creds for the specific timer that uses them. See DESIGN.md
+    # Appendix C ("Layered Secrets Management") for the pattern.
 
 
 class StorageBoxConfig(BaseModel):
@@ -130,36 +135,6 @@ class AlertingConfig(BaseModel):
     cooldown_minutes: int = 60
 
 
-class ClaudeConfig(BaseModel):
-    enabled: bool = True
-    api_key: str = ""
-    model: str = "claude-sonnet-4-20250514"
-    max_tokens: int = 4096
-    analysis_interval_minutes: int = 30
-    use_cli: bool = False
-    cli_path: str = "claude"
-    cli_timeout: int = 120
-
-
-class BotConfig(BaseModel):
-    debug: bool = False
-    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
-    api_host: str = "0.0.0.0"
-    api_port: int = 8080
-
-
-class MonitoringConfig(BaseModel):
-    disk_warning_percent: int = 80
-    disk_critical_percent: int = 90
-    memory_warning_percent: int = 80
-    memory_critical_percent: int = 95
-    cpu_warning_percent: int = 70
-    cpu_critical_percent: int = 90
-    health_check_interval_seconds: int = 30
-    resource_check_interval_seconds: int = 60
-    backup_check_interval_minutes: int = 15
-
-
 # ---------------------------------------------------------------------------
 # Root model
 # ---------------------------------------------------------------------------
@@ -174,19 +149,12 @@ class SeedConfig(BaseModel):
     gitlab: GitLabConfig
     backup: BackupConfig
     alerting: AlertingConfig = Field(default_factory=AlertingConfig)
-    claude: ClaudeConfig = Field(default_factory=ClaudeConfig)
-    bot: BotConfig = Field(default_factory=BotConfig)
-    monitoring: MonitoringConfig = Field(default_factory=MonitoringConfig)
 
     # -- Derived values (computed, not stored) -----------------------------
 
     @property
     def gitlab_url(self) -> str:
         return f"https://{self.gitlab.domain}"
-
-    @property
-    def gitlab_ssh_host(self) -> str:
-        return self.infrastructure.servers.gitlab.private_ip
 
     @property
     def borg_repo(self) -> str:
@@ -205,6 +173,29 @@ class SeedConfig(BaseModel):
             errors.append(
                 f"backup.borg.passphrase must be >= 20 characters (got {len(pp)})"
             )
+
+        # T2.1 from SECURITY-REVIEW-2026-05-15: refuse Hetzner endpoints for
+        # the S3 immutable tier. The whole point of that tier is to live
+        # outside the Hetzner account in case of account-level compromise
+        # or lockout. Using Hetzner Object Storage as the "immutable" tier
+        # defeats it.
+        s3 = self.backup.s3
+        if s3.enabled and not _has_placeholder(s3.endpoint):
+            endpoint_lc = s3.endpoint.lower()
+            if (
+                "hetzner" in endpoint_lc
+                or "your-objectstorage.com" in endpoint_lc  # Hetzner OS hostname
+                or "fsn1." in endpoint_lc
+                or "nbg1." in endpoint_lc
+                or "hel1." in endpoint_lc
+            ):
+                errors.append(
+                    f"backup.s3.endpoint '{s3.endpoint}' looks like Hetzner "
+                    "Object Storage. The S3 immutable tier MUST live on a "
+                    "different provider (Wasabi, Backblaze B2, AWS S3, etc.) "
+                    "to survive Hetzner account-level incidents. "
+                    "See docs/DESIGN.md §9.3 and SECURITY-REVIEW-2026-05-15.md T2.1."
+                )
 
         # Placeholder detection — refuse if any SECRET: values remain
         placeholders = _collect_placeholders(self)

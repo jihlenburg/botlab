@@ -41,16 +41,11 @@ runcmd:
     echo "$BACKUP_DEVICE /var/opt/gitlab/backups ext4 defaults,nofail 0 2" >> /etc/fstab
     mount /var/opt/gitlab/backups
 
-  # Install GitLab CE
+  # Install GitLab CE (version pinned via seed.yaml -> gitlab_version)
   - curl https://packages.gitlab.com/install/repositories/gitlab/gitlab-ce/script.deb.sh | bash
-  - EXTERNAL_URL="https://${gitlab_domain}" apt-get install -y gitlab-ce
-
-  # Create admin bot restricted SSH configuration
-  - |
-    mkdir -p /home/gitlab-admin/.ssh
-    echo 'command="/usr/local/bin/gitlab-admin-wrapper.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding ${admin_bot_public_key}' > /home/gitlab-admin/.ssh/authorized_keys
-    chmod 700 /home/gitlab-admin/.ssh
-    chmod 600 /home/gitlab-admin/.ssh/authorized_keys
+  - EXTERNAL_URL="https://${gitlab_domain}" apt-get install -y "gitlab-ce=${gitlab_version}"
+  # Hold the package so unattended-upgrades does not roll us forward silently
+  - apt-mark hold gitlab-ce
 
   # Enable and configure fail2ban
   - systemctl enable fail2ban
@@ -60,100 +55,7 @@ runcmd:
   - chmod 600 /etc/gitlab/gitlab.rb
   - chmod 600 /etc/gitlab/gitlab-secrets.json
 
-# Create gitlab-admin user for bot access
-users:
-  - name: gitlab-admin
-    groups: sudo
-    shell: /bin/bash
-    sudo: ['ALL=(ALL) NOPASSWD:/usr/bin/gitlab-ctl status, /usr/bin/gitlab-ctl tail *, /usr/bin/gitlab-backup create *, /usr/bin/gitlab-rake gitlab:check *']
-
 write_files:
-  # Admin wrapper script for restricted SSH commands
-  - path: /usr/local/bin/gitlab-admin-wrapper.sh
-    permissions: '0755'
-    content: |
-      #!/bin/bash
-      # Restricted command wrapper for GitLab admin bot
-      # Only allows specific safe commands
-
-      set -euo pipefail
-
-      ALLOWED_COMMANDS=(
-        # GitLab control commands
-        "gitlab-ctl status"
-        "gitlab-ctl tail"
-        "gitlab-ctl stop"
-        "gitlab-ctl start"
-        "gitlab-ctl restart"
-        "gitlab-ctl reconfigure"
-        # Backup commands
-        "gitlab-backup create"
-        "gitlab-backup restore"
-        # GitLab rake tasks
-        "gitlab-rake gitlab:check"
-        "gitlab-rake gitlab:cleanup"
-        "gitlab-rake gitlab:env:info"
-        # Database commands
-        "gitlab-psql"
-        # File operations for backup monitoring
-        "cat /var/opt/gitlab/backups"
-        "ls /var/opt/gitlab/backups"
-        "ls -"
-        "stat "
-        "find /var/opt/gitlab"
-        "find /tmp"
-        # System monitoring
-        "df -h"
-        "df "
-        "free -m"
-        "free "
-        "uptime"
-        "nproc"
-        "cat /proc/loadavg"
-        "tail "
-        # Health checks
-        "curl -s http://localhost/-/health"
-        "curl -s http://localhost/-/readiness"
-        "curl -s http://localhost/-/liveness"
-        "curl -sf http://localhost"
-        # Borg backup operations
-        "source /etc/gitlab-backup.conf"
-        "borg list"
-        "borg info"
-        "borg extract"
-        "borg create"
-        "borg prune"
-        # Log operations
-        "logrotate"
-        # Maintenance
-        "gitlab-ctl registry-garbage-collect"
-      )
-
-      # Get the command from SSH_ORIGINAL_COMMAND
-      CMD="$${SSH_ORIGINAL_COMMAND:-}"
-
-      if [[ -z "$$CMD" ]]; then
-        echo "Error: No command specified"
-        exit 1
-      fi
-
-      # Check if command is allowed
-      ALLOWED=false
-      for allowed_cmd in "$${ALLOWED_COMMANDS[@]}"; do
-        if [[ "$$CMD" == "$$allowed_cmd"* ]]; then
-          ALLOWED=true
-          break
-        fi
-      done
-
-      if [[ "$$ALLOWED" == "true" ]]; then
-        eval "$$CMD"
-      else
-        echo "Error: Command not allowed"
-        echo "Allowed commands: $${ALLOWED_COMMANDS[*]}"
-        exit 1
-      fi
-
   # GitLab backup script
   - path: /usr/local/bin/gitlab-backup-to-borg.sh
     permissions: '0755'
@@ -198,8 +100,13 @@ write_files:
         /etc/gitlab/gitlab-secrets.json \
         >> "$$LOG_FILE" 2>&1
 
-      # Prune old backups (keep hourly for 24h, daily for 7d, weekly for 4w, monthly for 6m)
-      borg prune --keep-hourly=24 --keep-daily=7 --keep-weekly=4 --keep-monthly=6 \
+      # Prune old backups using retention from /etc/gitlab-backup.conf
+      # (generated from seed.yaml via `seed_bootstrap.py --target borg-conf`)
+      borg prune \
+        --keep-hourly="$${BACKUP_KEEP_HOURLY:-24}" \
+        --keep-daily="$${BACKUP_KEEP_DAILY:-7}" \
+        --keep-weekly="$${BACKUP_KEEP_WEEKLY:-4}" \
+        --keep-monthly="$${BACKUP_KEEP_MONTHLY:-12}" \
         "$$BORG_REPO" >> "$$LOG_FILE" 2>&1
 
       # Clean local backups older than 24 hours

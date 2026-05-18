@@ -226,33 +226,90 @@ chmod 755 "$ADMIN_SCRIPT"
 log_info "Admin helper script created: $ADMIN_SCRIPT"
 
 # =============================================================================
-# Step 7: Remind about offline key storage
+# Step 7: Securely delete full-access keys from the server
 # =============================================================================
+#
+# This step is REQUIRED for the append-only design to be real. Two keys with
+# full Storage Box access currently sit in /root/.ssh/:
+#   - $ADMIN_KEY_PATH   (the copy you should move offline)
+#   - $ORIGINAL_KEY     (the key originally created by setup-borg-backup.sh)
+#
+# Both are functionally equivalent — leaving either on the server means a root
+# compromise still has full Storage Box access (delete archives, etc.) and the
+# append-only protection is decorative.
+
+ORIGINAL_KEY="/root/.ssh/storagebox_key"
 
 echo ""
 echo "=============================================="
-echo "  Setup Complete!"
+echo "  Layer 1 hardening: remove full-access keys"
 echo "=============================================="
 echo ""
-echo "IMPORTANT — Offline Key Storage:"
+echo "Before this server is considered hardened, the full-access SSH keys"
+echo "MUST leave the box. The append-only protection is only real once these"
+echo "are gone."
 echo ""
-echo "  1. Copy $ADMIN_KEY_PATH to an OFFLINE location:"
-echo "     - Encrypted USB drive"
-echo "     - Password manager"
-echo "     - Printed QR code in a safe"
+echo "You should have:"
+echo "  - Copied $ADMIN_KEY_PATH to your OFFLINE recovery kit"
+echo "    (encrypted USB / password manager / printed QR in a safe)"
+echo "  - Verified you can read it back from the offline copy"
 echo ""
-echo "  2. Then REMOVE the admin key from this server:"
-echo "     rm $ADMIN_KEY_PATH ${ADMIN_KEY_PATH}.pub"
+echo "Files this script is about to securely delete:"
+echo "  - $ADMIN_KEY_PATH (and .pub)"
+if [[ -f "$ORIGINAL_KEY" ]]; then
+    echo "  - $ORIGINAL_KEY (and .pub) — the original full-access key from"
+    echo "    setup-borg-backup.sh, no longer referenced by config"
+fi
 echo ""
-echo "  3. For routine backups, only the restricted key is needed."
-echo "     The backup cron job will continue to work."
+echo "If you have NOT yet copied the admin key offline, type anything else"
+echo "and we'll skip the deletion (you'll need to do it manually later)."
 echo ""
-echo "  4. For prune/maintenance, temporarily copy the admin key back"
-echo "     and use: $ADMIN_SCRIPT prune ..."
+read -rp "Type 'DELETE' to confirm secure deletion now: " CONFIRM
+
+if [[ "$CONFIRM" == "DELETE" ]]; then
+    log_info "Securely deleting full-access keys..."
+
+    # shred each key file before removing the inode
+    for f in "$ADMIN_KEY_PATH" "${ADMIN_KEY_PATH}.pub"; do
+        if [[ -f "$f" ]]; then
+            shred -u -- "$f" && log_info "  deleted: $f"
+        fi
+    done
+
+    if [[ -f "$ORIGINAL_KEY" ]]; then
+        for f in "$ORIGINAL_KEY" "${ORIGINAL_KEY}.pub"; do
+            if [[ -f "$f" ]]; then
+                shred -u -- "$f" && log_info "  deleted: $f"
+            fi
+        done
+    fi
+
+    log_info "Full-access keys removed from server."
+    log_info "Recovery now requires the offline key — verify your offline copy NOW."
+else
+    log_warn "Skipped deletion. Full-access keys remain on this server."
+    log_warn "Append-only protection is INCOMPLETE until you remove them."
+    log_warn "When ready:"
+    echo "  shred -u $ADMIN_KEY_PATH ${ADMIN_KEY_PATH}.pub"
+    if [[ -f "$ORIGINAL_KEY" ]]; then
+        echo "  shred -u $ORIGINAL_KEY ${ORIGINAL_KEY}.pub"
+    fi
+fi
+
 echo ""
-echo "Files created:"
+echo "=============================================="
+echo "  Setup Complete"
+echo "=============================================="
+echo ""
+echo "For routine backups, only the restricted key is needed."
+echo "The backup cron job will continue to work."
+echo ""
+echo "For prune/maintenance, temporarily copy the admin key back from your"
+echo "offline kit and use: $ADMIN_SCRIPT prune ..."
+echo "Remove it again immediately after."
+echo ""
+echo "Files remaining on this server:"
 echo "  Restricted key: $RESTRICTED_KEY_PATH"
-echo "  Admin key:      $ADMIN_KEY_PATH (move offline!)"
 echo "  Admin script:   $ADMIN_SCRIPT"
 echo "  Config backup:  ${CONF_FILE}.bak.*"
 echo ""
