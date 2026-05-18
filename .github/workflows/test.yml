@@ -33,7 +33,23 @@ jobs:
 
       - name: Run shellcheck on scripts
         run: |
+          # Non-recursive glob: scripts/vendor/ is excluded by design.
+          # Vendored upstream files are pinned by checksum, not lint-clean.
           shellcheck scripts/*.sh
+
+  verify-vendored-checksums:
+    # Closes security review T1.6 — ensures the vendored packages.gitlab.com
+    # repo-install script (and any future vendored file) has not drifted from
+    # the version that was audited. If this fails, refresh per
+    # scripts/vendor/README.md.
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify vendored file checksums
+        working-directory: scripts/vendor
+        run: sha256sum -c CHECKSUMS
 
   validate-terraform:
     runs-on: ubuntu-latest

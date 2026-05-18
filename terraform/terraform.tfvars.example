@@ -51,9 +51,13 @@ ssh_public_keys = {
   "admin-bob"   = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... bob@example.com"
 }
 
-# IP addresses allowed to SSH to the GitLab server (CIDR notation)
-# For security, restrict to your office/VPN IPs
-# Empty list allows SSH from anywhere (NOT recommended for production)
+# IP addresses allowed to SSH to the GitLab server (CIDR notation).
+# REQUIRED — must contain at least one valid CIDR. `terraform plan` will
+# fail if this is missing or empty; there is NO fallback to 0.0.0.0/0.
+# (security review T1.4, 2026-05-15)
+#
+# Tip: list every operator's home / office / VPN egress separately so you
+# can revoke individuals without flushing the whole allowlist.
 
 trusted_ssh_ips = [
   "203.0.113.10/32",   # Example: Office IP
@@ -61,14 +65,38 @@ trusted_ssh_ips = [
 ]
 
 # =============================================================================
-# Required: Storage Box Configuration (for BorgBackup)
+# Required: Storage Box (Borg backup destination)
 # =============================================================================
-# Order a Storage Box from Hetzner Robot: https://robot.hetzner.com/storage
-# Recommended: BX21 (1TB) or larger for GitLab backups
-# Note: SSH key setup is done manually after terraform apply using setup-borg-backup.sh
+# Storage Boxes are now provisioned via the Hetzner Cloud Console (and this
+# Terraform code) as of provider v1.63.0 (May 2026). The previous Hetzner
+# Robot account is no longer required. See docs/DEPLOY.md §1.
+#
+# The Storage Box and its append-only sub-account are managed by
+# terraform/storage_box.tf with `prevent_destroy = true` — accidentally
+# `terraform destroy`-ing them is blocked. Removing that guard requires a
+# deliberate code-review change.
 
-storage_box_host = "uXXXXX.your-storagebox.de"
-storage_box_user = "uXXXXX"
+storage_box_name     = "acme-gitlab-backups"
+storage_box_type     = "bx21"   # 5TB; bump to bx31/bx41 for larger projects
+storage_box_location = "fsn1"   # same region as the server; Hetzner picks a different DC
+
+# Primary Storage Box password. Used for emergency Hetzner Console access
+# only — day-to-day Borg backups use the SSH key below. Generate with:
+#   openssl rand -base64 24
+# Store in offline recovery kit AND in seed.yaml (encrypted).
+storage_box_password = "GENERATE-32-CHAR-RANDOM-PER-DEPLOY.md-2a"
+
+# OPERATOR'S OFFLINE full-access SSH public key. The PRIVATE half MUST
+# live only in the offline recovery kit and MUST NEVER be copied to the
+# GitLab server (DEPLOY.md §2a). Generate the keypair on an offline
+# workstation; paste the .pub line here.
+storage_box_ssh_public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... recovery@offline-laptop"
+
+# Password for the append-only sub-account. Used once, by
+# scripts/setup-borg-append-only.sh, to SFTP in and install the
+# forced-command authorized_keys file. Borg uses SSH keys after that.
+# Generate with: openssl rand -base64 24
+storage_box_subaccount_password = "GENERATE-32-CHAR-RANDOM-PER-DEPLOY.md-6"
 
 # =============================================================================
 # Server Configuration

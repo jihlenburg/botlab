@@ -1,6 +1,6 @@
 # GitLab Infrastructure Project - TODO List
 
-**Last Updated**: 2026-05-15
+**Last Updated**: 2026-05-18
 **Last security review**: 2026-05-15 — see `docs/SECURITY-REVIEW-2026-05-15.md`
 **Next baseline security review due**: 2026-08-15 (quarterly check) / 2027-05-15 (annual)
 
@@ -53,12 +53,14 @@
   - [ ] Run `gitlab-ctl reconfigure`
   - [ ] Verify GitLab accessible
 
-- [ ] **Backup System Setup**
-  - [ ] Create Storage Box on Hetzner
-  - [ ] Run `setup-borg-backup.sh`
-  - [ ] Configure append-only sub-account
-  - [ ] Test backup creation
-  - [ ] Test backup restoration
+- [ ] **Backup System Setup** (Storage Box now provisioned by Terraform as of design v2.7 — no manual Hetzner step)
+  - [x] ~~Create Storage Box on Hetzner~~ — now handled by `terraform/storage_box.tf` (provider v1.63.0, unified Cloud Console)
+  - [x] ~~Configure append-only sub-account~~ — sub-account itself is Terraformed; the append-only SSH constraint is installed by `scripts/setup-borg-append-only.sh` (forced-command in authorized_keys)
+  - [ ] Generate OFFLINE SSH keypair on a non-daily-driver machine, put pubkey in seed.yaml, store private half on two FDE USBs (DEPLOY.md §1)
+  - [ ] After `terraform apply`: paste `terraform output storage_box_post_apply` values into `seed.yaml.backup.storage_box.host/user`, re-run `seed_bootstrap.py --target borg-conf`
+  - [ ] Run `setup-borg-backup.sh` then `setup-borg-append-only.sh` on the server (with `STORAGEBOX_SUBACCOUNT_PASSWORD` env var; rotate password in Console immediately after)
+  - [ ] Test backup creation (a real archive — the smoke-test create+delete in `setup-borg-backup.sh` only proves the keys work)
+  - [ ] Test backup restoration via `scripts/restore-test.sh` on an ephemeral CX21
 
 - [ ] **Monitoring & Alerting Setup**
   - [ ] Install Prometheus, Alertmanager, Grafana on the GitLab server (systemd)
@@ -100,17 +102,17 @@ See `docs/SECURITY-REVIEW-2026-05-15.md` for full context. Items grouped by tier
 
 **T1 — fix sooner:**
 
-- [ ] **T1.2** Configure remote Terraform state backend (Hetzner Object Storage, encrypted); also snapshot state into offline recovery kit
+- [ ] **T1.2** Configure remote Terraform state backend (Hetzner Object Storage, encrypted); also snapshot state into offline recovery kit. **Urgency bumped 2026-05-18 (design v2.7):** state now contains Storage Box + sub-account IDs (the load-bearing ransomware-resistant copy of all data). Local-only state is acceptable for a typo-resistant `terraform apply` (we have `prevent_destroy` on both resources), but losing the state file would force a `terraform import` recovery that's substantially more painful than it used to be.
 - [ ] **T1.3** Define recovery-workstation profile in `docs/RUNBOOK-RECOVERY.md` (dedicated machine OR live-USB, FDE, network isolation when not recovering)
-- [ ] **T1.4** Make `trusted_ssh_ips` a required Terraform variable with no default (fail-loud instead of silent open-SSH)
+- [x] **T1.4** Made `trusted_ssh_ips` a required Terraform variable with two validation blocks (non-empty + every entry is a valid CIDR). Removed the `dynamic "rule"` fallback in `terraform/firewalls.tf` that opened SSH to `0.0.0.0/0`. `terraform plan` now fails loudly on empty list, invalid CIDR, or omitted variable. Files: `terraform/variables.tf`, `terraform/firewalls.tf`, `terraform/terraform.tfvars.example`. Verified locally with three `terraform plan` invocations covering empty, invalid, and valid inputs.
 - [x] **T1.5** Monitoring stack exposure & auth model — partial: DEPLOY.md §7 now says "bind to 127.0.0.1" and "SSH port-forward only" explicitly; external observer webhook auth via shared secret documented in `external-observer/`. Pending: actually applying the binding in the install commands (operator's job in Phase 4).
-- [ ] **T1.6** Vendor the GitLab repo install script (`scripts/install-gitlab-repo.sh`) with CI checksum verification; have cloud-init run the vendored copy instead of `curl ... | bash`
+- [x] **T1.6** Vendored the upstream packages.gitlab.com repo-install script at `scripts/vendor/install-gitlab-repo.sh` (kept under `vendor/` so the non-recursive `shellcheck scripts/*.sh` glob does not lint upstream content). Cloud-init now ships the script via `write_files` with `encoding: b64`, sourced at `terraform apply` time via `base64encode(file(...))` in `terraform/servers.tf`. Cloud-init `runcmd` runs `bash /usr/local/bin/install-gitlab-repo.sh` instead of `curl … | bash`. Added a `verify-vendored-checksums` job to `.github/workflows/test.yml` that runs `sha256sum -c CHECKSUMS`. Refresh procedure documented in `scripts/vendor/README.md`. Initial pin: sha256 `3f6a403e…2e8d30b`, audited 2026-05-18.
 
 **T2 — should fix:**
 
 - [x] **T2.1** Seed validator now refuses Hetzner endpoints when `backup.s3.enabled: true` — `scripts/seed_schema.py` `_validate_constraints` rejects `hetzner`/`your-objectstorage.com`/`fsn1.`/`nbg1.`/`hel1.` in `backup.s3.endpoint`.
 - [ ] **T2.2** Document GitLab CVE monitoring/patching cadence in DESIGN.md §5.6 (subscribe to GitLab security advisories; patch criticals within published window)
-- [ ] **T2.3** Add `sshd` fail2ban jail to cloud-init
+- [x] **T2.3** Added `[sshd]` fail2ban jail to cloud-init at `/etc/fail2ban/jail.d/sshd.conf` using the built-in `sshd` filter with `backend = systemd` (correct for Ubuntu 24.04 / journald). 5 failures in 10 min → 1h ban. Files: `terraform/templates/gitlab-cloud-init.yaml`.
 - [ ] **T2.4** TLS hardening in `gitlab.rb`: Mozilla Intermediate ciphers, OCSP stapling, document HSTS preload submission in DEPLOY.md
 - [ ] **T2.5** Confirm/configure LB sticky-session cookie flags (`Secure; HttpOnly; SameSite=Lax`)
 - [x] **T2.6** Credential rotation matrix added to DESIGN.md Appendix C.8 (v2.2).
@@ -129,6 +131,13 @@ See `docs/SECURITY-REVIEW-2026-05-15.md` for full context. Items grouped by tier
 - [ ] **T4.1** Add a `--verify-data` `borg check` cadence (annually?) — separate timer; current weekly check is `--repository-only` for speed. See `scripts/borg-check.sh` header comment.
 - [ ] **T4.2** Migrate the hourly backup from cron (`/etc/cron.d/gitlab-backup` baked into cloud-init) to the systemd timer `gitlab-backup.timer` once Layer 2 systemd-creds is in place. Keep the cron during the transition; remove only after the timer has run successfully through a full daily cycle.
 - [ ] **T4.3** External observer alerting destination: choose a notification channel that is independent of the operator's Microsoft account (per `external-observer/README.md`). The observer should never depend on the same identity it's trying to protect.
+
+**New TODOs from v2.7 (Storage Box → Terraform migration):**
+
+- [ ] **T5.1** Decide whether to keep `lifecycle { ignore_changes = [ssh_keys] }` on `hcloud_storage_box.gitlab_backups` permanently or document an "OK to remove for one apply" rotation runbook. Current state: rotation goes through the Hetzner Console because changing the attribute would force a destroy/recreate of the box (and the data). A cleaner runbook would be: temporarily comment out the `ignore_changes`, apply once with the new key, restore the `ignore_changes`, commit. Untested; document before first real rotation.
+- [ ] **T5.2** Validate `sshpass` is in the cloud-init packages list on the next provisioning test. (Added in v2.7; both new setup scripts depend on it for the one-shot SFTP install.)
+- [ ] **T5.3** The two `setup-borg-*.sh` scripts on the server now require the sub-account password via env var. Consider whether systemd-creds Layer 2 (Phase 5) should also cover this — probably not (one-shot use only, rotated immediately), but worth a paragraph in DESIGN.md Appendix C when Layer 2 lands.
+- [ ] **T5.4** The smoke-test archive `setup-borg-append-only.sh` creates (to prove append works under the constraint) cannot be deleted from the server. Document the manual prune step from the recovery workstation in DESIGN.md §12 (operational procedures).
 
 ### Phase 6: Future Enhancements (Priority: LOW)
 

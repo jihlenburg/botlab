@@ -81,8 +81,34 @@ class GitLabConfig(BaseModel):
 
 
 class StorageBoxConfig(BaseModel):
-    host: str
-    user: str
+    # ---- Provisioning intent (used to generate terraform.tfvars) -----------
+    # These flow into the hcloud_storage_box / hcloud_storage_box_subaccount
+    # resources in terraform/storage_box.tf. The Storage Box product is now
+    # in the Hetzner Cloud Console (no separate Robot account required, as
+    # of provider v1.63.0, May 2026).
+    name: str = "acme-gitlab-backups"
+    type: Literal["bx11", "bx21", "bx31", "bx41"] = "bx21"
+    location: Literal["fsn1", "nbg1", "hel1"] = "fsn1"
+
+    # Primary Storage Box password — used for emergency Hetzner Console
+    # access only. Day-to-day Borg backups authenticate via SSH key.
+    password: str = ""
+
+    # OPERATOR'S OFFLINE full-access public key. Private half MUST live only
+    # in the offline recovery kit (DEPLOY.md §2a, OFFLINE-KIT-TEMPLATE §2).
+    ssh_public_key: str = ""
+
+    # Password for the append-only sub-account — used once by
+    # setup-borg-append-only.sh to SFTP in and install the forced-command
+    # authorized_keys file.
+    subaccount_password: str = ""
+
+    # ---- Runtime values (filled in AFTER `terraform apply`) ----------------
+    # Operator pastes these from `terraform output storage_box_post_apply`.
+    # Optional (empty default) so seed validation passes before first apply;
+    # the borg-conf generator refuses to run if they're still empty post-apply.
+    host: str = ""
+    user: str = ""
 
 
 class BorgConfig(BaseModel):
@@ -173,6 +199,34 @@ class SeedConfig(BaseModel):
             errors.append(
                 f"backup.borg.passphrase must be >= 20 characters (got {len(pp)})"
             )
+
+        # Storage Box passwords — match the validation in terraform/variables.tf
+        sb = self.backup.storage_box
+        if sb.password and not _has_placeholder(sb.password) and len(sb.password) < 20:
+            errors.append(
+                f"backup.storage_box.password must be >= 20 characters (got {len(sb.password)})"
+            )
+        if (
+            sb.subaccount_password
+            and not _has_placeholder(sb.subaccount_password)
+            and len(sb.subaccount_password) < 20
+        ):
+            errors.append(
+                "backup.storage_box.subaccount_password must be >= 20 characters "
+                f"(got {len(sb.subaccount_password)})"
+            )
+
+        # Storage Box SSH public key format (offline full-access key)
+        if sb.ssh_public_key and not _has_placeholder(sb.ssh_public_key):
+            if not re.match(
+                r"^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp\d+) [A-Za-z0-9+/=]+",
+                sb.ssh_public_key,
+            ):
+                errors.append(
+                    "backup.storage_box.ssh_public_key must be a valid OpenSSH-format "
+                    "public key (ssh-ed25519, ssh-rsa, or ecdsa-sha2-nistp*). "
+                    "This is the OFFLINE full-access key — see DEPLOY.md §2a."
+                )
 
         # T2.1 from SECURITY-REVIEW-2026-05-15: refuse Hetzner endpoints for
         # the S3 immutable tier. The whole point of that tier is to live

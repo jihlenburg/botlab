@@ -15,6 +15,11 @@ packages:
   - jq
   - htop
   - fail2ban
+  # sshpass: needed once, by setup-borg-backup.sh and setup-borg-append-only.sh,
+  # to SFTP the sub-account's authorized_keys file using its initial password.
+  # After append-only is enabled and the operator rotates the password in the
+  # Hetzner Console, sshpass is no longer needed (Borg uses SSH key auth).
+  - sshpass
 
 # Create necessary directories
 runcmd:
@@ -41,8 +46,12 @@ runcmd:
     echo "$BACKUP_DEVICE /var/opt/gitlab/backups ext4 defaults,nofail 0 2" >> /etc/fstab
     mount /var/opt/gitlab/backups
 
-  # Install GitLab CE (version pinned via seed.yaml -> gitlab_version)
-  - curl https://packages.gitlab.com/install/repositories/gitlab/gitlab-ce/script.deb.sh | bash
+  # Install GitLab CE (version pinned via seed.yaml -> gitlab_version).
+  # The repo-install script is vendored at scripts/vendor/install-gitlab-repo.sh
+  # and dropped on disk via the write_files entry below (encoding: b64).
+  # Checksum is verified in CI on every push. Security review T1.6 (2026-05-15)
+  # — closes the `curl … | bash` anti-pattern.
+  - bash /usr/local/bin/install-gitlab-repo.sh
   - EXTERNAL_URL="https://${gitlab_domain}" apt-get install -y "gitlab-ce=${gitlab_version}"
   # Hold the package so unattended-upgrades does not roll us forward silently
   - apt-mark hold gitlab-ce
@@ -56,6 +65,15 @@ runcmd:
   - chmod 600 /etc/gitlab/gitlab-secrets.json
 
 write_files:
+  # Vendored packages.gitlab.com repo-install script (T1.6).
+  # The content is the verbatim upstream script, base64-encoded by Terraform
+  # at apply time from scripts/vendor/install-gitlab-repo.sh. Checksum is
+  # verified by CI; refresh procedure in scripts/vendor/README.md.
+  - path: /usr/local/bin/install-gitlab-repo.sh
+    permissions: '0755'
+    encoding: b64
+    content: ${install_gitlab_repo_sh_b64}
+
   # GitLab backup script
   - path: /usr/local/bin/gitlab-backup-to-borg.sh
     permissions: '0755'
@@ -130,6 +148,21 @@ write_files:
     content: |
       # GitLab backup - runs hourly
       0 * * * * root /usr/local/bin/gitlab-backup-to-borg.sh
+
+  # Fail2ban: SSH brute-force protection (security review T2.3, 2026-05-15)
+  # Uses the built-in `sshd` filter shipped by fail2ban; no custom filter needed.
+  # backend=systemd reads from the systemd journal — works on Ubuntu 24.04 even
+  # when /var/log/auth.log isn't created by rsyslog.
+  - path: /etc/fail2ban/jail.d/sshd.conf
+    permissions: '0644'
+    content: |
+      [sshd]
+      enabled = true
+      port = ssh
+      backend = systemd
+      maxretry = 5
+      findtime = 600
+      bantime = 3600
 
   # Fail2ban GitLab configuration
   - path: /etc/fail2ban/jail.d/gitlab.conf

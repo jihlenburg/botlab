@@ -1,288 +1,186 @@
 #!/bin/bash
 # =============================================================================
-# BorgBackup Setup Script for GitLab
+# Initialize the Borg repository on the append-only Storage Box sub-account
 # =============================================================================
-# This script sets up BorgBackup for GitLab backups to Hetzner Storage Box
-# Usage: ./setup-borg-backup.sh
+#
+# Run ONCE per fresh deploy, on the GitLab server, AFTER:
+#   1. `terraform apply` provisioned the Storage Box + sub-account
+#      (see terraform/storage_box.tf — Hetzner Cloud product as of provider
+#      v1.63.0; no longer Hetzner Robot)
+#   2. seed.yaml host/user filled in from `terraform output
+#      storage_box_post_apply` and `seed_bootstrap.py --target borg-conf`
+#      regenerated /etc/gitlab-backup.conf
+#   3. /etc/gitlab-backup.conf is in place on this server (chmod 600)
+#
+# After this script: the Borg repo exists, the sub-account's
+# ~/.ssh/authorized_keys holds an UNCONSTRAINED SSH key (server can read,
+# write, AND delete). The next script (setup-borg-append-only.sh) replaces
+# that with a forced-command CONSTRAINED key so only append is possible.
+# Always run the two scripts back-to-back.
+#
+# Required environment variable:
+#   STORAGEBOX_SUBACCOUNT_PASSWORD — the sub-account password from
+#   seed.yaml backup.storage_box.subaccount_password. Used for SFTP login
+#   so we can install the SSH key. Not persisted anywhere. Rotate the
+#   password in the Hetzner Console after setup-borg-append-only.sh
+#   completes.
+#
+# Usage:
+#   sudo STORAGEBOX_SUBACCOUNT_PASSWORD='...' ./setup-borg-backup.sh
 
 set -euo pipefail
 
-# Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
-log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+log_info()  { echo -e "${GREEN}[INFO]${NC} $1"; }
+log_warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
-# Check if running as root
+# ---- Sanity checks --------------------------------------------------------
+
 if [[ $EUID -ne 0 ]]; then
-    log_error "This script must be run as root"
+    log_error "Must run as root."
     exit 1
 fi
 
-echo "=============================================="
-echo "    BorgBackup Setup for GitLab"
-echo "=============================================="
-echo ""
-
-# =============================================================================
-# Configuration
-# =============================================================================
-
-read -rp "Enter Storage Box hostname (e.g., uXXXXX.your-storagebox.de): " STORAGE_BOX_HOST
-read -rp "Enter Storage Box username (e.g., uXXXXX): " STORAGE_BOX_USER
-read -rsp "Enter Borg encryption passphrase (min 20 chars): " BORG_PASSPHRASE
-echo ""
-
-if [[ ${#BORG_PASSPHRASE} -lt 20 ]]; then
-    log_error "Passphrase must be at least 20 characters"
+if [[ -z "${STORAGEBOX_SUBACCOUNT_PASSWORD:-}" ]]; then
+    log_error "STORAGEBOX_SUBACCOUNT_PASSWORD env var not set."
+    log_error "Set it from seed.yaml backup.storage_box.subaccount_password:"
+    log_error "  sudo STORAGEBOX_SUBACCOUNT_PASSWORD='...' $0"
     exit 1
 fi
 
-BORG_REPO="ssh://${STORAGE_BOX_USER}@${STORAGE_BOX_HOST}:23/./gitlab-borg"
-SSH_KEY_PATH="/root/.ssh/storagebox_key"
+CONF_FILE="/etc/gitlab-backup.conf"
+if [[ ! -f "$CONF_FILE" ]]; then
+    log_error "$CONF_FILE not found. Generate it with:"
+    log_error "  python scripts/seed_bootstrap.py seed.yaml --target borg-conf"
+    log_error "Then SCP it to this server at $CONF_FILE (chmod 600)."
+    exit 1
+fi
 
-# =============================================================================
-# Step 1: Generate SSH key for Storage Box
-# =============================================================================
+# shellcheck disable=SC1090
+source "$CONF_FILE"
 
-log_info "Step 1: Setting up SSH key for Storage Box..."
-
-if [[ -f "$SSH_KEY_PATH" ]]; then
-    log_warn "SSH key already exists at $SSH_KEY_PATH"
-    read -rp "Overwrite? (yes/no): " OVERWRITE
-    if [[ "$OVERWRITE" == "yes" ]]; then
-        rm -f "$SSH_KEY_PATH" "${SSH_KEY_PATH}.pub"
-    else
-        log_info "Using existing key"
+# Required exports from the conf
+for var in BORG_REPO BORG_PASSPHRASE BORG_RSH; do
+    if [[ -z "${!var:-}" ]]; then
+        log_error "$var not set in $CONF_FILE. Re-run seed_bootstrap.py."
+        exit 1
     fi
-fi
+done
 
-if [[ ! -f "$SSH_KEY_PATH" ]]; then
-    ssh-keygen -t ed25519 -f "$SSH_KEY_PATH" -N "" -C "gitlab-backup@$(hostname)"
-    log_info "SSH key generated: $SSH_KEY_PATH"
-fi
+# Pull the host + user out of $BORG_REPO ("ssh://user@host:23/...")
+STORAGE_BOX_USER="$(echo "$BORG_REPO" | sed -E 's|ssh://([^@]+)@.*|\1|')"
+STORAGE_BOX_HOST="$(echo "$BORG_REPO" | sed -E 's|ssh://[^@]+@([^:/]+).*|\1|')"
 
-echo ""
-echo "=============================================="
-echo "IMPORTANT: Add this public key to Storage Box"
-echo "=============================================="
-echo ""
-cat "${SSH_KEY_PATH}.pub"
-echo ""
-echo "Add this key to Storage Box via:"
-echo "  1. Hetzner Robot Panel -> Storage Box -> SSH keys"
-echo "  2. Or append to ~/.ssh/authorized_keys on Storage Box"
-echo ""
-read -rp "Press Enter once the key is added to the Storage Box..."
-
-# =============================================================================
-# Step 2: Test SSH connection
-# =============================================================================
-
-log_info "Step 2: Testing SSH connection to Storage Box..."
-
-SSH_CMD="ssh -i $SSH_KEY_PATH -p 23 -o StrictHostKeyChecking=accept-new ${STORAGE_BOX_USER}@${STORAGE_BOX_HOST}"
-
-if $SSH_CMD "echo 'Connection successful'" 2>/dev/null; then
-    log_info "SSH connection successful!"
-else
-    log_error "SSH connection failed. Check your Storage Box configuration."
+if [[ -z "$STORAGE_BOX_USER" || -z "$STORAGE_BOX_HOST" ]]; then
+    log_error "Could not parse user/host from BORG_REPO: $BORG_REPO"
     exit 1
 fi
 
-# =============================================================================
-# Step 3: Initialize Borg repository
-# =============================================================================
+# sshpass is needed for the SFTP key install (no key on Storage Box yet)
+if ! command -v sshpass >/dev/null 2>&1; then
+    log_error "sshpass not installed. apt-get install -y sshpass"
+    exit 1
+fi
 
-log_info "Step 3: Initializing Borg repository..."
+SUBACCOUNT_KEY_PATH="/root/.ssh/storagebox_subaccount_key"
 
-export BORG_PASSPHRASE
-export BORG_RSH="ssh -i $SSH_KEY_PATH -o StrictHostKeyChecking=accept-new"
+echo "=============================================="
+echo "  Borg repo init on Storage Box sub-account"
+echo "=============================================="
+echo "  Sub-account:  $STORAGE_BOX_USER@$STORAGE_BOX_HOST"
+echo "  Repo:         $BORG_REPO"
+echo "  SSH key:      $SUBACCOUNT_KEY_PATH (will be created)"
+echo ""
 
-# Check if repo already exists
-if borg info "$BORG_REPO" &>/dev/null; then
-    log_warn "Borg repository already exists at $BORG_REPO"
-    read -rp "Continue with existing repo? (yes/no): " CONTINUE
-    if [[ "$CONTINUE" != "yes" ]]; then
+# ---- Step 1: Generate the sub-account SSH key on this server --------------
+
+log_info "Step 1/4: Generating SSH key for sub-account access..."
+
+if [[ -f "$SUBACCOUNT_KEY_PATH" ]]; then
+    log_warn "Key already exists at $SUBACCOUNT_KEY_PATH"
+    read -rp "Re-use the existing key? (yes/no): " REUSE
+    if [[ "$REUSE" != "yes" ]]; then
+        log_error "Refusing to overwrite. Delete it manually first if you want to regenerate."
         exit 1
     fi
 else
-    log_info "Creating new Borg repository (this may take a moment)..."
+    install -d -m 700 /root/.ssh
+    ssh-keygen -t ed25519 -f "$SUBACCOUNT_KEY_PATH" -N "" \
+        -C "gitlab-borg-subaccount@$(hostname)"
+    chmod 600 "$SUBACCOUNT_KEY_PATH"
+fi
+
+# ---- Step 2: Install UNCONSTRAINED authorized_keys via SFTP ---------------
+
+log_info "Step 2/4: Installing SSH key on the sub-account (unconstrained, for init)..."
+
+# Just the pubkey, no forced-command yet. setup-borg-append-only.sh replaces
+# this with a forced-command line after init succeeds.
+SFTP_BATCH="$(mktemp)"
+trap 'rm -f "$SFTP_BATCH"' EXIT
+cat > "$SFTP_BATCH" <<EOF
+-mkdir .ssh
+chmod 700 .ssh
+put $SUBACCOUNT_KEY_PATH.pub .ssh/authorized_keys
+chmod 600 .ssh/authorized_keys
+EOF
+
+if ! SSHPASS="$STORAGEBOX_SUBACCOUNT_PASSWORD" sshpass -e sftp \
+        -o StrictHostKeyChecking=accept-new \
+        -P 23 -b "$SFTP_BATCH" "$STORAGE_BOX_USER@$STORAGE_BOX_HOST"; then
+    log_error "SFTP key install failed. Check that the sub-account password is correct."
+    log_error "(rotate it in console.hetzner.cloud and update seed.yaml if needed)"
+    exit 1
+fi
+
+log_info "Key installed. Testing SSH..."
+if ! ssh -i "$SUBACCOUNT_KEY_PATH" -p 23 \
+        -o StrictHostKeyChecking=accept-new \
+        "$STORAGE_BOX_USER@$STORAGE_BOX_HOST" "echo ok" >/dev/null 2>&1; then
+    log_error "SSH test failed even after key install. Aborting before init."
+    exit 1
+fi
+
+# ---- Step 3: borg init ----------------------------------------------------
+
+log_info "Step 3/4: Initializing Borg repository (repokey-blake2)..."
+
+if borg info "$BORG_REPO" >/dev/null 2>&1; then
+    log_warn "Borg repository already exists at $BORG_REPO — skipping init"
+else
     borg init --encryption=repokey-blake2 "$BORG_REPO"
-    log_info "Borg repository initialized with repokey-blake2 encryption"
+    log_info "Repo initialized with repokey-blake2"
 fi
 
-# =============================================================================
-# Step 4: Create configuration file
-# =============================================================================
+# ---- Step 4: Test create + delete (proves unconstrained still works) ------
 
-log_info "Step 4: Creating configuration file..."
+log_info "Step 4/4: Creating + deleting a test archive..."
 
-cat > /etc/gitlab-backup.conf << EOF
-# BorgBackup configuration for GitLab
-# Generated: $(date)
-# DO NOT SHARE THIS FILE - Contains sensitive credentials
+TEST_FILE="$(mktemp)"
+echo "init-smoke-test $(date -u +%FT%TZ)" > "$TEST_FILE"
+TEST_ARCHIVE="${BORG_REPO}::init-test-$(date -u +%Y%m%d-%H%M%S)"
 
-export BORG_REPO="$BORG_REPO"
-export BORG_PASSPHRASE="$BORG_PASSPHRASE"
-export BORG_RSH="ssh -i $SSH_KEY_PATH -o StrictHostKeyChecking=accept-new"
-
-# Backup settings
-export BACKUP_KEEP_HOURLY=24
-export BACKUP_KEEP_DAILY=7
-export BACKUP_KEEP_WEEKLY=4
-export BACKUP_KEEP_MONTHLY=12
-EOF
-
-chmod 600 /etc/gitlab-backup.conf
-log_info "Configuration saved to /etc/gitlab-backup.conf"
-
-# =============================================================================
-# Step 5: Test backup
-# =============================================================================
-
-log_info "Step 5: Running test backup..."
-
-# Create a small test archive
-TEST_ARCHIVE="${BORG_REPO}::test-$(date +%Y%m%d-%H%M%S)"
-
-echo "Test backup content" > /tmp/borg-test-file.txt
-borg create --stats "$TEST_ARCHIVE" /tmp/borg-test-file.txt
-
-log_info "Test archive created successfully!"
-
-# List archives
-log_info "Current archives in repository:"
-borg list "$BORG_REPO"
-
-# Clean up test
+borg create "$TEST_ARCHIVE" "$TEST_FILE"
 borg delete "$TEST_ARCHIVE"
-rm /tmp/borg-test-file.txt
+rm -f "$TEST_FILE"
 
-# =============================================================================
-# Step 6: Create backup script (if not exists from cloud-init)
-# =============================================================================
-
-log_info "Step 6: Setting up backup script..."
-
-BACKUP_SCRIPT="/usr/local/bin/gitlab-backup-to-borg.sh"
-
-if [[ ! -f "$BACKUP_SCRIPT" ]]; then
-    log_info "Creating backup script..."
-    cat > "$BACKUP_SCRIPT" << 'SCRIPT_EOF'
-#!/bin/bash
-# GitLab backup script with BorgBackup
-# Run hourly via cron
-
-set -euo pipefail
-
-LOG_FILE="/var/log/gitlab-backup.log"
-BACKUP_DIR="/var/opt/gitlab/backups"
-
-# Source Borg configuration
-if [[ -f /etc/gitlab-backup.conf ]]; then
-    source /etc/gitlab-backup.conf
-else
-    echo "$(date): ERROR - /etc/gitlab-backup.conf not found" >> "$LOG_FILE"
-    exit 1
-fi
-
-echo "$(date): Starting GitLab backup" >> "$LOG_FILE"
-
-# Create GitLab backup (skip artifacts/LFS as they're in object storage)
-gitlab-backup create STRATEGY=copy SKIP=artifacts,lfs >> "$LOG_FILE" 2>&1
-
-# Find the latest backup file
-LATEST_BACKUP=$(ls -t "$BACKUP_DIR"/*_gitlab_backup.tar 2>/dev/null | head -1)
-
-if [[ -z "$LATEST_BACKUP" ]]; then
-    echo "$(date): ERROR - No backup file found" >> "$LOG_FILE"
-    exit 1
-fi
-
-echo "$(date): Sending backup to Borg repository" >> "$LOG_FILE"
-
-# Send to BorgBackup
-borg create --stats --compression zstd \
-    "${BORG_REPO}::{hostname}-{now:%Y-%m-%d_%H:%M}" \
-    "$LATEST_BACKUP" \
-    /etc/gitlab/gitlab.rb \
-    /etc/gitlab/gitlab-secrets.json \
-    >> "$LOG_FILE" 2>&1
-
-# Prune old backups (keep hourly for 24h, daily for 7d, weekly for 4w, monthly for 12m)
-borg prune --keep-hourly=24 --keep-daily=7 --keep-weekly=4 --keep-monthly=12 \
-    "$BORG_REPO" >> "$LOG_FILE" 2>&1
-
-# Clean local backups older than 24 hours
-find "$BACKUP_DIR" -name "*_gitlab_backup.tar" -mtime +1 -delete
-
-echo "$(date): Backup completed successfully" >> "$LOG_FILE"
-SCRIPT_EOF
-    chmod 755 "$BACKUP_SCRIPT"
-    log_info "Backup script created: $BACKUP_SCRIPT"
-else
-    log_info "Backup script already exists (from cloud-init)"
-fi
-
-# =============================================================================
-# Step 7: Enable cron job
-# =============================================================================
-
-log_info "Step 7: Enabling backup cron job..."
-
-cat > /etc/cron.d/gitlab-backup << 'EOF'
-# GitLab backup - runs hourly at minute 0
-0 * * * * root /usr/local/bin/gitlab-backup-to-borg.sh >> /var/log/gitlab-backup.log 2>&1
-EOF
-
-chmod 644 /etc/cron.d/gitlab-backup
-
-log_info "Cron job enabled (hourly backups)"
-
-# =============================================================================
-# Step 8: Run initial backup test
-# =============================================================================
-
-log_info "Step 8: Running initial backup verification..."
-
-# Verify the backup script works
-if "$BACKUP_SCRIPT" --help 2>&1 | grep -q "gitlab-backup" || bash -n "$BACKUP_SCRIPT"; then
-    log_info "Backup script syntax OK"
-else
-    log_warn "Backup script may have issues - check manually"
-fi
-
-# =============================================================================
-# Complete
-# =============================================================================
+log_info "Test archive create + delete succeeded (confirms unconstrained access)."
 
 echo ""
 echo "=============================================="
-echo "    BorgBackup Setup Complete!"
+echo "  Init complete — NEXT STEP REQUIRED"
 echo "=============================================="
 echo ""
-echo "Configuration:"
-echo "  Repository: $BORG_REPO"
-echo "  SSH Key: $SSH_KEY_PATH"
-echo "  Config: /etc/gitlab-backup.conf"
-echo "  Cron: /etc/cron.d/gitlab-backup"
-echo "  Script: /usr/local/bin/gitlab-backup-to-borg.sh"
-echo "  Log: /var/log/gitlab-backup.log"
+echo "The sub-account currently has UNCONSTRAINED access. To enforce"
+echo "append-only protection (the whole point of the sub-account), run:"
 echo ""
-echo "IMPORTANT: Save the encryption passphrase securely!"
-echo "Without it, backups CANNOT be restored."
+echo "  sudo STORAGEBOX_SUBACCOUNT_PASSWORD='...' /opt/botlab/scripts/setup-borg-append-only.sh"
 echo ""
-echo "To run a manual backup:"
-echo "  /usr/local/bin/gitlab-backup-to-borg.sh"
-echo ""
-echo "To list backups:"
-echo "  source /etc/gitlab-backup.conf && borg list \$BORG_REPO"
-echo ""
-echo "To verify backups:"
-echo "  /path/to/scripts/verify-backup.sh"
+echo "DO NOT run any production backups until that step completes —"
+echo "the ransomware-resistance is not yet active."
 echo ""

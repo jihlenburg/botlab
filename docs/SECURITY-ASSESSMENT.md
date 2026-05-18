@@ -1,7 +1,7 @@
 # Security Assessment & Disaster Recovery Analysis
 
-**Document Version**: 2.0
-**Date**: 2026-05-12
+**Document Version**: 2.1
+**Date**: 2026-05-18
 **Classification**: Internal - Technical Review
 
 ---
@@ -62,8 +62,8 @@ This document provides a comprehensive security assessment of the ACME Corp GitL
 | **Ransomware via compromised credentials** | Medium | Critical | 2FA required, SSO |
 | **Ransomware via supply chain (GitLab vulnerability)** | Low | Critical | Regular updates, monitoring |
 | **Insider threat (malicious admin)** | Low | Critical | Audit logging, separation of duties |
-| **Storage Box credential theft** | Low | Critical | Key-based auth, append-only sub-account, admin key stored offline |
-| **Hetzner account compromise** | Very Low | Critical | 2FA, but single point of failure (mitigate with cross-provider S3 immutable backup) |
+| **Storage Box credential theft** | Low | Critical | Append-only sub-account enforced at SSH command layer (forced `borg serve --append-only`); offline full-access key never on the server; primary password used only for emergency Console access. **NB:** as of design v2.7, a single `hcloud_token` controls both the cloud server AND the Storage Box — credential theft of that token is now closer to a Hetzner account compromise than it used to be. See `hcloud_token` row below and the v2.7 row of DESIGN.md C.8. |
+| **Hetzner account compromise** | Very Low | Critical | 2FA on the Hetzner Cloud account; cross-provider S3 immutable backup as defence-in-depth; offline recovery kit (with OFFLINE Storage Box key) survives account-level lockout. Mandatory `lifecycle { prevent_destroy = true }` on the Storage Box resource and its sub-account so a careless `terraform destroy` cannot wipe the repo. |
 
 ### 2.2 Attack Scenarios
 
@@ -446,16 +446,35 @@ Rare           │             │ Region outage │              │ Account   
 
 ## Appendix A: Borg Append-Only Configuration
 
+As of design v2.7 (2026-05-18), the Storage Box and its sub-account
+are managed by Terraform via the unified Hetzner Cloud Console API —
+the Hetzner Robot account is no longer involved. The "append-only"
+property is enforced at the SSH command layer, not at the sub-account
+permission layer (the API only offers `readonly` or full-rw, neither
+of which is correct for an append-only backup destination).
+
 ```bash
-# On Storage Box, create restricted sub-account via Hetzner Robot
-# Name: backup-write (or similar)
-# Permissions: Read, Write (no Delete)
+# 1. Provisioning is in terraform/storage_box.tf:
+#      resource "hcloud_storage_box"            "gitlab_backups"     { ... }
+#      resource "hcloud_storage_box_subaccount" "gitlab_append_only" { ... }
+#    Both carry `lifecycle { prevent_destroy = true }`. The primary box
+#    also carries `ignore_changes = [ssh_keys]` because the Hetzner API
+#    forces resource replacement on key updates, which would destroy
+#    the entire repo.
 
-# Update backup script to use restricted account
-export BORG_REPO="ssh://uXXXXX-sub1@uXXXXX.your-storagebox.de:23/./gitlab-borg"
+# 2. After `terraform apply`, the GitLab server runs (back-to-back):
+#      sudo STORAGEBOX_SUBACCOUNT_PASSWORD='...' setup-borg-backup.sh
+#      sudo STORAGEBOX_SUBACCOUNT_PASSWORD='...' setup-borg-append-only.sh
+#    The first installs an UNCONSTRAINED authorized_keys via SFTP and
+#    runs `borg init`. The second REPLACES it with a forced-command
+#    line that constrains the sub-account's SSH access to:
+#      command="borg serve --append-only --restrict-to-repository /gitlab-borg",no-pty,...
 
-# Pruning requires separate, offline-stored credentials
-# Only run prune manually or from air-gapped machine with full credentials
+# 3. BORG_REPO from the server's POV:
+export BORG_REPO="ssh://uXXXXX-subN@uXXXXX-subN.your-storagebox.de:23/./gitlab-borg"
+# Pruning requires the OFFLINE full-access key — never on the server,
+# only in the offline recovery kit. Run prune from a recovery
+# workstation during scheduled maintenance windows.
 ```
 
 ## Appendix B: 3-2-1 Backup Implementation

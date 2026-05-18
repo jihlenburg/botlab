@@ -26,6 +26,9 @@ resource "hcloud_server" "gitlab_primary" {
     gitlab_version   = var.gitlab_version
     data_volume_id   = hcloud_volume.gitlab_data.id
     backup_volume_id = hcloud_volume.gitlab_backups.id
+    # Vendored upstream script, checksum verified in CI (security review T1.6).
+    # See scripts/vendor/README.md for refresh procedure.
+    install_gitlab_repo_sh_b64 = base64encode(file("${path.module}/../scripts/vendor/install-gitlab-repo.sh"))
   })
 
   lifecycle {

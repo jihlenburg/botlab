@@ -1,31 +1,28 @@
 #!/bin/bash
 # =============================================================================
-# Append-Only BorgBackup Setup for Ransomware-Resistant Backups
+# Replace the sub-account's authorized_keys with a forced-command, append-only
+# constraint. After this runs, the GitLab server's SSH key can create new
+# archives but cannot delete or modify existing ones — even if the server is
+# fully compromised at root.
 # =============================================================================
-# This script configures a Hetzner Storage Box sub-account with append-only
-# access so that a compromised GitLab server cannot delete or modify existing
-# backup archives.
 #
-# Implements: SECURITY-ASSESSMENT.md Section 3.3.1 / DESIGN.md Section 9
+# Run ONCE per fresh deploy, AFTER setup-borg-backup.sh has succeeded.
 #
-# How it works:
-#   1. A RESTRICTED SSH key is generated for daily backup operations.
-#      This key can only APPEND new archives — it cannot prune or delete.
-#   2. An ADMIN SSH key (existing or new) retains full access for
-#      pruning and maintenance.  Store this key OFFLINE (USB / vault).
-#   3. /etc/gitlab-backup.conf is updated to use the restricted key.
+# Append-only IS NOT a Hetzner-side permission (the sub-account API only
+# offers `readonly` or full r/w/d). The constraint is enforced at the SSH
+# command layer via a forced `borg serve --append-only` prefix in the
+# sub-account's authorized_keys.
 #
-# Prerequisites:
-#   - BorgBackup already installed (apt install borgbackup)
-#   - Hetzner Storage Box with SSH access enabled
-#   - Existing Borg repo (run setup-borg-backup.sh first)
+# Required environment variable (same as setup-borg-backup.sh):
+#   STORAGEBOX_SUBACCOUNT_PASSWORD — sub-account password for the SFTP
+#   install. After this script succeeds, rotate the password in the
+#   Hetzner Cloud Console (it has been in shell history).
 #
-# Usage: sudo ./setup-borg-append-only.sh
-# =============================================================================
+# Usage:
+#   sudo STORAGEBOX_SUBACCOUNT_PASSWORD='...' ./setup-borg-append-only.sh
 
 set -euo pipefail
 
-# Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -35,29 +32,19 @@ log_info()  { echo -e "${GREEN}[INFO]${NC} $1"; }
 log_warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
-# Check root
+# ---- Sanity checks --------------------------------------------------------
+
 if [[ $EUID -ne 0 ]]; then
-    log_error "This script must be run as root"
+    log_error "Must run as root."
     exit 1
 fi
 
-echo "=============================================="
-echo "  Append-Only BorgBackup Configuration"
-echo "=============================================="
-echo ""
-echo "This hardens your Borg repository so that the"
-echo "backup SSH key can only CREATE new archives."
-echo "Prune/delete requires a separate admin key."
-echo ""
+if [[ -z "${STORAGEBOX_SUBACCOUNT_PASSWORD:-}" ]]; then
+    log_error "STORAGEBOX_SUBACCOUNT_PASSWORD env var not set."
+    exit 1
+fi
 
-# =============================================================================
-# Configuration
-# =============================================================================
-
-RESTRICTED_KEY_PATH="/root/.ssh/storagebox_appendonly_key"
-ADMIN_KEY_PATH="/root/.ssh/storagebox_admin_key"
 CONF_FILE="/etc/gitlab-backup.conf"
-
 if [[ ! -f "$CONF_FILE" ]]; then
     log_error "$CONF_FILE not found. Run setup-borg-backup.sh first."
     exit 1
@@ -66,250 +53,122 @@ fi
 # shellcheck disable=SC1090
 source "$CONF_FILE"
 
-if [[ -z "${BORG_REPO:-}" ]]; then
-    log_error "BORG_REPO not set in $CONF_FILE"
+for var in BORG_REPO BORG_PASSPHRASE; do
+    if [[ -z "${!var:-}" ]]; then
+        log_error "$var not set in $CONF_FILE."
+        exit 1
+    fi
+done
+
+STORAGE_BOX_USER="$(echo "$BORG_REPO" | sed -E 's|ssh://([^@]+)@.*|\1|')"
+STORAGE_BOX_HOST="$(echo "$BORG_REPO" | sed -E 's|ssh://[^@]+@([^:/]+).*|\1|')"
+REPO_PATH="$(echo "$BORG_REPO" | sed -E 's|.*:23/(.*)|\1|')"
+
+SUBACCOUNT_KEY_PATH="/root/.ssh/storagebox_subaccount_key"
+
+if [[ ! -f "$SUBACCOUNT_KEY_PATH" ]]; then
+    log_error "Sub-account SSH key not found at $SUBACCOUNT_KEY_PATH."
+    log_error "Run setup-borg-backup.sh first."
     exit 1
 fi
 
-# =============================================================================
-# Step 1: Generate restricted (append-only) SSH key
-# =============================================================================
-
-log_info "Step 1: Generating restricted SSH key for append-only access..."
-
-if [[ -f "$RESTRICTED_KEY_PATH" ]]; then
-    log_warn "Restricted key already exists at $RESTRICTED_KEY_PATH"
-    read -rp "Overwrite? (yes/no): " OVERWRITE
-    if [[ "$OVERWRITE" != "yes" ]]; then
-        log_info "Keeping existing restricted key"
-    else
-        rm -f "$RESTRICTED_KEY_PATH" "${RESTRICTED_KEY_PATH}.pub"
-    fi
-fi
-
-if [[ ! -f "$RESTRICTED_KEY_PATH" ]]; then
-    ssh-keygen -t ed25519 -f "$RESTRICTED_KEY_PATH" -N "" \
-        -C "borg-appendonly@$(hostname)"
-    chmod 600 "$RESTRICTED_KEY_PATH"
-    log_info "Restricted key generated: $RESTRICTED_KEY_PATH"
-fi
-
-# =============================================================================
-# Step 2: Preserve or generate admin key
-# =============================================================================
-
-log_info "Step 2: Setting up admin key (for prune/delete operations)..."
-
-EXISTING_KEY="/root/.ssh/storagebox_key"
-
-if [[ -f "$ADMIN_KEY_PATH" ]]; then
-    log_info "Admin key already exists at $ADMIN_KEY_PATH"
-elif [[ -f "$EXISTING_KEY" ]]; then
-    log_info "Copying existing Storage Box key as admin key"
-    cp "$EXISTING_KEY" "$ADMIN_KEY_PATH"
-    cp "${EXISTING_KEY}.pub" "${ADMIN_KEY_PATH}.pub" 2>/dev/null || true
-    chmod 600 "$ADMIN_KEY_PATH"
-else
-    log_info "Generating new admin key..."
-    ssh-keygen -t ed25519 -f "$ADMIN_KEY_PATH" -N "" \
-        -C "borg-admin@$(hostname)"
-    chmod 600 "$ADMIN_KEY_PATH"
-fi
-
-# =============================================================================
-# Step 3: Display keys for Storage Box configuration
-# =============================================================================
-
-echo ""
-echo "=============================================="
-echo "  Storage Box SSH Key Configuration"
-echo "=============================================="
-echo ""
-echo "You need to add BOTH keys to the Storage Box"
-echo "with different permissions:"
-echo ""
-echo "--- RESTRICTED KEY (append-only) ---"
-echo "Add this key with APPEND-ONLY access:"
-echo ""
-cat "${RESTRICTED_KEY_PATH}.pub"
-echo ""
-echo "On Hetzner Robot: Storage Box -> Sub-accounts"
-echo "  - Create sub-account with 'read-only' + 'create' (no delete)"
-echo "  - Or use authorized_keys with forced command:"
-echo "    command=\"borg serve --append-only --restrict-to-repository ./gitlab-borg\" $(cat "${RESTRICTED_KEY_PATH}.pub")"
-echo ""
-echo "--- ADMIN KEY (full access) ---"
-echo "This key has full access (prune, delete, check)."
-echo "STORE IT OFFLINE after setup — do not leave it on this server!"
-echo ""
-cat "${ADMIN_KEY_PATH}.pub"
-echo ""
-
-read -rp "Press Enter once both keys are configured on the Storage Box..."
-
-# =============================================================================
-# Step 4: Test restricted key
-# =============================================================================
-
-log_info "Step 4: Testing restricted key access..."
-
-export BORG_RSH="ssh -i $RESTRICTED_KEY_PATH -o StrictHostKeyChecking=accept-new -p 23"
-
-if borg list --last 1 "$BORG_REPO" &>/dev/null; then
-    log_info "Restricted key can list archives (OK)"
-else
-    log_warn "Restricted key could not list archives — verify Storage Box config"
-fi
-
-# =============================================================================
-# Step 5: Update backup configuration
-# =============================================================================
-
-log_info "Step 5: Updating $CONF_FILE to use restricted key..."
-
-# Back up current config
-cp "$CONF_FILE" "${CONF_FILE}.bak.$(date +%Y%m%d%H%M%S)"
-
-# Replace the SSH key reference
-if grep -q "storagebox_key" "$CONF_FILE"; then
-    sed -i "s|storagebox_key|storagebox_appendonly_key|g" "$CONF_FILE"
-    log_info "Updated BORG_RSH to use restricted key"
-else
-    log_warn "Could not find storagebox_key reference in $CONF_FILE"
-    log_warn "Please manually update BORG_RSH to use: $RESTRICTED_KEY_PATH"
-fi
-
-# =============================================================================
-# Step 6: Create admin helper script
-# =============================================================================
-
-ADMIN_SCRIPT="/usr/local/bin/borg-admin.sh"
-
-cat > "$ADMIN_SCRIPT" << 'ADMINEOF'
-#!/bin/bash
-# Borg admin operations (prune, delete, check) using the full-access admin key.
-# This key should normally be stored OFFLINE. Copy it to the server only when
-# maintenance is needed, then remove it again.
-
-set -euo pipefail
-
-ADMIN_KEY="/root/.ssh/storagebox_admin_key"
-CONF="/etc/gitlab-backup.conf"
-
-if [[ ! -f "$ADMIN_KEY" ]]; then
-    echo "ERROR: Admin key not found at $ADMIN_KEY"
-    echo "Copy the admin key from your offline vault to run this script."
+if ! command -v sshpass >/dev/null 2>&1; then
+    log_error "sshpass not installed. apt-get install -y sshpass"
     exit 1
 fi
 
-# shellcheck disable=SC1090
-source "$CONF"
-export BORG_RSH="ssh -i $ADMIN_KEY -o StrictHostKeyChecking=accept-new -p 23"
-
-echo "Borg admin shell — running with full-access key"
-echo "Available commands:"
-echo "  borg prune --keep-hourly=24 --keep-daily=7 --keep-weekly=4 --keep-monthly=12 \$BORG_REPO"
-echo "  borg check \$BORG_REPO"
-echo "  borg list \$BORG_REPO"
-echo ""
-
-# Pass through any arguments as a borg command
-if [[ $# -gt 0 ]]; then
-    borg "$@"
-else
-    echo "Usage: $0 <borg-subcommand> [args...]"
-    echo "Example: $0 prune --keep-monthly=12 \$BORG_REPO"
-fi
-ADMINEOF
-
-chmod 755 "$ADMIN_SCRIPT"
-log_info "Admin helper script created: $ADMIN_SCRIPT"
-
-# =============================================================================
-# Step 7: Securely delete full-access keys from the server
-# =============================================================================
-#
-# This step is REQUIRED for the append-only design to be real. Two keys with
-# full Storage Box access currently sit in /root/.ssh/:
-#   - $ADMIN_KEY_PATH   (the copy you should move offline)
-#   - $ORIGINAL_KEY     (the key originally created by setup-borg-backup.sh)
-#
-# Both are functionally equivalent — leaving either on the server means a root
-# compromise still has full Storage Box access (delete archives, etc.) and the
-# append-only protection is decorative.
-
-ORIGINAL_KEY="/root/.ssh/storagebox_key"
-
-echo ""
 echo "=============================================="
-echo "  Layer 1 hardening: remove full-access keys"
+echo "  Enabling append-only constraint"
 echo "=============================================="
+echo "  Sub-account:  $STORAGE_BOX_USER@$STORAGE_BOX_HOST"
+echo "  Repo path:    $REPO_PATH"
 echo ""
-echo "Before this server is considered hardened, the full-access SSH keys"
-echo "MUST leave the box. The append-only protection is only real once these"
-echo "are gone."
-echo ""
-echo "You should have:"
-echo "  - Copied $ADMIN_KEY_PATH to your OFFLINE recovery kit"
-echo "    (encrypted USB / password manager / printed QR in a safe)"
-echo "  - Verified you can read it back from the offline copy"
-echo ""
-echo "Files this script is about to securely delete:"
-echo "  - $ADMIN_KEY_PATH (and .pub)"
-if [[ -f "$ORIGINAL_KEY" ]]; then
-    echo "  - $ORIGINAL_KEY (and .pub) — the original full-access key from"
-    echo "    setup-borg-backup.sh, no longer referenced by config"
-fi
-echo ""
-echo "If you have NOT yet copied the admin key offline, type anything else"
-echo "and we'll skip the deletion (you'll need to do it manually later)."
-echo ""
-read -rp "Type 'DELETE' to confirm secure deletion now: " CONFIRM
 
-if [[ "$CONFIRM" == "DELETE" ]]; then
-    log_info "Securely deleting full-access keys..."
+# ---- Step 1: Build the constrained authorized_keys line -------------------
 
-    # shred each key file before removing the inode
-    for f in "$ADMIN_KEY_PATH" "${ADMIN_KEY_PATH}.pub"; do
-        if [[ -f "$f" ]]; then
-            shred -u -- "$f" && log_info "  deleted: $f"
-        fi
-    done
+log_info "Step 1/3: Building forced-command authorized_keys line..."
 
-    if [[ -f "$ORIGINAL_KEY" ]]; then
-        for f in "$ORIGINAL_KEY" "${ORIGINAL_KEY}.pub"; do
-            if [[ -f "$f" ]]; then
-                shred -u -- "$f" && log_info "  deleted: $f"
-            fi
-        done
-    fi
+PUBKEY="$(cat "${SUBACCOUNT_KEY_PATH}.pub")"
+FORCED_CMD="command=\"borg serve --append-only --restrict-to-repository $REPO_PATH\",no-pty,no-port-forwarding,no-agent-forwarding,no-X11-forwarding,no-user-rc"
+AUTH_KEYS_LINE="${FORCED_CMD} ${PUBKEY}"
 
-    log_info "Full-access keys removed from server."
-    log_info "Recovery now requires the offline key — verify your offline copy NOW."
-else
-    log_warn "Skipped deletion. Full-access keys remain on this server."
-    log_warn "Append-only protection is INCOMPLETE until you remove them."
-    log_warn "When ready:"
-    echo "  shred -u $ADMIN_KEY_PATH ${ADMIN_KEY_PATH}.pub"
-    if [[ -f "$ORIGINAL_KEY" ]]; then
-        echo "  shred -u $ORIGINAL_KEY ${ORIGINAL_KEY}.pub"
-    fi
+AUTH_KEYS_FILE="$(mktemp)"
+trap 'rm -f "$AUTH_KEYS_FILE"' EXIT
+echo "$AUTH_KEYS_LINE" > "$AUTH_KEYS_FILE"
+
+# ---- Step 2: SFTP REPLACE the existing authorized_keys --------------------
+
+log_info "Step 2/3: Uploading constrained authorized_keys (replaces unconstrained)..."
+
+SFTP_BATCH="$(mktemp)"
+trap 'rm -f "$AUTH_KEYS_FILE" "$SFTP_BATCH"' EXIT
+cat > "$SFTP_BATCH" <<EOF
+put $AUTH_KEYS_FILE .ssh/authorized_keys
+chmod 600 .ssh/authorized_keys
+EOF
+
+if ! SSHPASS="$STORAGEBOX_SUBACCOUNT_PASSWORD" sshpass -e sftp \
+        -o StrictHostKeyChecking=accept-new \
+        -P 23 -b "$SFTP_BATCH" "$STORAGE_BOX_USER@$STORAGE_BOX_HOST"; then
+    log_error "SFTP install of constrained authorized_keys failed."
+    log_error "The repo is still UNCONSTRAINED. Investigate and re-run."
+    exit 1
 fi
 
+# ---- Step 3: Test that append works AND delete is blocked -----------------
+
+log_info "Step 3/3: Verifying constraint (create should pass, delete should fail)..."
+
+TEST_FILE="$(mktemp)"
+echo "append-test $(date -u +%FT%TZ)" > "$TEST_FILE"
+TEST_ARCHIVE_NAME="append-test-$(date -u +%Y%m%d-%H%M%S)"
+TEST_ARCHIVE="${BORG_REPO}::${TEST_ARCHIVE_NAME}"
+
+if ! borg create "$TEST_ARCHIVE" "$TEST_FILE"; then
+    log_error "Create FAILED under the constrained key. Append-only setup is broken."
+    log_error "Repo is currently inaccessible from this server. Re-run setup-borg-backup.sh"
+    log_error "to restore unconstrained access, fix the issue, then re-run this script."
+    rm -f "$TEST_FILE"
+    exit 1
+fi
+log_info "  Create: succeeded (expected)"
+
+# Try to delete; we WANT this to fail. `borg delete` on a constrained server
+# returns non-zero. We invert with `!` and check for the expected failure.
+if borg delete "$TEST_ARCHIVE" 2>/dev/null; then
+    log_error "Delete SUCCEEDED — append-only is NOT being enforced!"
+    log_error "Investigate the authorized_keys file on the sub-account."
+    rm -f "$TEST_FILE"
+    exit 1
+fi
+log_info "  Delete: blocked (expected)"
+
+rm -f "$TEST_FILE"
+
+# The append-test archive is now stuck in the repo (we can't delete it from
+# the constrained key). That's OK — it's tiny. Use the OFFLINE full-access
+# key (from recovery kit) to prune it during the next maintenance window.
+log_warn "The smoke-test archive '$TEST_ARCHIVE_NAME' is now in the repo."
+log_warn "It cannot be removed from this server (that's the point). Prune it"
+log_warn "from your offline workstation during the next maintenance window."
+
 echo ""
 echo "=============================================="
-echo "  Setup Complete"
+echo "  Append-only constraint active"
 echo "=============================================="
 echo ""
-echo "For routine backups, only the restricted key is needed."
-echo "The backup cron job will continue to work."
+echo "Backup repo:       $BORG_REPO"
+echo "Append-only key:   $SUBACCOUNT_KEY_PATH"
+echo "Forced command:    borg serve --append-only --restrict-to-repository $REPO_PATH"
 echo ""
-echo "For prune/maintenance, temporarily copy the admin key back from your"
-echo "offline kit and use: $ADMIN_SCRIPT prune ..."
-echo "Remove it again immediately after."
+echo "ROTATE THE SUB-ACCOUNT PASSWORD NOW:"
+echo "  console.hetzner.cloud -> Storage Boxes -> $STORAGE_BOX_USER -> Sub-accounts"
+echo "  → Reset password (do NOT update seed.yaml or terraform.tfvars — the"
+echo "    password is only needed once, by these two setup scripts)."
 echo ""
-echo "Files remaining on this server:"
-echo "  Restricted key: $RESTRICTED_KEY_PATH"
-echo "  Admin script:   $ADMIN_SCRIPT"
-echo "  Config backup:  ${CONF_FILE}.bak.*"
+echo "After rotation, the only way the GitLab server can talk to the backup"
+echo "repo is the constrained SSH key — exactly the property we want."
+echo ""
+echo "Verify no full-access secrets remain on this server:"
+echo "  ls /root/.ssh/        # should only show storagebox_subaccount_key{,.pub}"
 echo ""

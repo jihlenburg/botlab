@@ -12,8 +12,7 @@ If you are recovering from a disaster, do not use this document — see [RUNBOOK
 
 Before you start, have:
 
-- [ ] Hetzner Cloud project + API token with read/write scope
-- [ ] Hetzner Robot account (for the Storage Box; this is a separate account from Cloud)
+- [ ] Hetzner Cloud project + API token with read/write scope (this is now the **only** Hetzner account you need — Storage Boxes moved from Robot to Cloud Console as of provider v1.63.0, May 2026)
 - [ ] A registered domain you can point an A record at
 - [ ] An Azure AD tenant with permission to create an Enterprise Application (for SSO)
 - [ ] An SMTP account (Microsoft 365 by default; any will do)
@@ -29,16 +28,56 @@ Local tools on your workstation:
 
 ---
 
-## 1. Provision the Storage Box (Hetzner Robot, 5 min)
+## 1. Generate offline credentials (10 min)
 
-Done in the Hetzner Robot web UI, not in Terraform — Storage Boxes are a separate product.
+Storage Box provisioning itself moved to Terraform (next sections), but a
+few inputs have to come from outside the repo: the **OFFLINE recovery
+keypair** and two random passwords.
 
-- [ ] Order a BX21 (5 TB) in Falkenstein, ideally a **different DC** from where you'll put the GitLab server (`fsn1-dc14` vs the Storage Box DC)
-- [ ] Once active, note the hostname (`uXXXXX.your-storagebox.de`) and username (`uXXXXX`)
-- [ ] Generate a sub-account from the Storage Box UI with **read+write but NO delete** — this will be the append-only key
-- [ ] Keep the main account credentials **offline only** (recovery kit). They are required for `borg prune`, not for routine backups.
+These ALL go into `seed.yaml` in §2 and flow through to
+`terraform/storage_box.tf` at apply time.
 
-See `scripts/setup-borg-append-only.sh` once we have the server; it automates the SSH-side setup.
+- [ ] **Generate the OFFLINE full-access SSH keypair**. Do this on a
+      machine that is not your daily-driver laptop — ideally a
+      live-USB Linux image or a freshly-imaged workstation. The PRIVATE
+      half NEVER leaves the offline recovery kit; the PUBLIC half is
+      injected by Terraform onto the primary Storage Box account.
+
+      ```bash
+      ssh-keygen -t ed25519 -f ./storagebox_offline_key \
+          -N '' -C "recovery@offline-laptop-$(date +%Y%m%d)"
+      ```
+
+      - Copy `storagebox_offline_key` (private) onto two FDE-encrypted
+        USB sticks. Store one off-site, one in the safe. Never SCP it.
+      - Copy `storagebox_offline_key.pub` (public) into your clipboard —
+        you'll paste it into `seed.yaml` in §2 under
+        `backup.storage_box.ssh_public_key`.
+      - **Wipe the keypair files from the offline machine** once they
+        are on the USBs (`shred -u storagebox_offline_key*`).
+
+- [ ] **Generate the primary Storage Box password** (≥ 20 chars):
+      ```bash
+      openssl rand -base64 24
+      ```
+      Goes into `seed.yaml -> backup.storage_box.password`. Used only
+      for emergency Hetzner Console access — day-to-day Borg backups use
+      the SSH key above.
+
+- [ ] **Generate the append-only sub-account password** (≥ 20 chars):
+      ```bash
+      openssl rand -base64 24
+      ```
+      Goes into `seed.yaml -> backup.storage_box.subaccount_password`.
+      Used ONCE, by the two `setup-borg-*.sh` scripts on the server,
+      to SFTP up the sub-account's `authorized_keys`. Rotate in the
+      Hetzner Console after that.
+
+If you are wondering why we don't just let Terraform generate these
+passwords: deterministic regeneration on `terraform apply` is important
+for DR (the offline kit contains the seed, not the Terraform state),
+and Terraform's `random_password` would either be ephemeral or live in
+state — both worse than operator-generated + recorded-in-kit.
 
 ---
 
@@ -67,7 +106,11 @@ Specifically, you need:
 - [ ] `infrastructure.ssh.trusted_ips` — your office/VPN CIDR (do not leave empty in production)
 - [ ] `gitlab.domain` — e.g. `gitlab.yourcompany.com`
 - [ ] `gitlab.version` — pinned package version, e.g. `17.10.0-ce.0` (browse https://packages.gitlab.com/gitlab/gitlab-ce for current options)
-- [ ] `backup.storage_box.*` — from step 1
+- [ ] `backup.storage_box.name` / `.type` / `.location` — Storage Box provisioning intent (e.g. `acme-gitlab-backups`, `bx21`, `fsn1`)
+- [ ] `backup.storage_box.password` — primary password from §1 (`openssl rand -base64 24`)
+- [ ] `backup.storage_box.subaccount_password` — append-only sub-account password from §1
+- [ ] `backup.storage_box.ssh_public_key` — OFFLINE recovery pubkey from §1 (the `.pub` you saved; the private half is on the USBs only)
+- [ ] `backup.storage_box.host` / `.user` — **LEAVE EMPTY**. These come back as `terraform output` values in §3.
 - [ ] `backup.borg.passphrase` — generate fresh, 20+ chars (e.g. `openssl rand -base64 32`). **Record offline immediately.**
 - [ ] `backup.s3.*` — fill these in only if you've already provisioned the immutable bucket (recommended). Set `enabled: true`.
 - [ ] `alerting.email.*` — SMTP creds for Alertmanager
@@ -83,9 +126,12 @@ Per the layered approach in DESIGN.md Appendix C, secrets are NOT treated unifor
 | `infrastructure.hetzner.api_token` | Operator laptop only (in encrypted `seed.yaml` and the gitignored `terraform.tfvars`) | **Never copy to the server.** Terraform runs from your laptop. |
 | `infrastructure.ssh.admin_keys.*` (public halves) | Server `authorized_keys` via cloud-init | Public keys; private halves stay on operators' workstations (ideally on a hardware token). |
 | `backup.borg.passphrase` | Server `/etc/gitlab-backup.conf` until Layer 2 is implemented, then under `systemd-creds` | This is the only laptop secret that has to live on the server. Plan to migrate it under systemd-creds in Phase 5. |
+| `backup.storage_box.password` (primary) | Operator laptop only (encrypted `seed.yaml`) + offline recovery kit | NEVER on the server. Used once at create time by Terraform; reserved for emergency Hetzner Console access thereafter. |
+| `backup.storage_box.subaccount_password` | Operator laptop only (encrypted `seed.yaml`) + offline recovery kit; passed to the GitLab server via env var on the two `setup-borg-*.sh` runs and then **rotated in Console immediately** (DEPLOY §6c). | Briefly on the server's process env (not its disk). Rotate after first deploy and after every operator turnover. |
+| `backup.storage_box.ssh_public_key` (the PUBLIC half) | `seed.yaml` and `terraform.tfvars` on operator laptop; injected by Terraform into the Storage Box at create time | The PRIVATE half of this keypair NEVER leaves the offline recovery kit (per DEPLOY §1). |
+| **OFFLINE Storage Box private key + primary password** | **OFFLINE recovery kit only — two FDE USBs, one off-site** | The only path to `borg prune` / `borg check` / `borg delete` on the repo. Bring it onto a recovery workstation only during scheduled maintenance, then wipe. |
 | `backup.s3.*` (access/secret) | Server `/etc/gitlab-s3-backup.conf` until Layer 2 | Same as above. |
 | `alerting.email.smtp_password` | Server `/etc/gitlab/gitlab.rb` until Layer 2 | Same as above. |
-| **Borg full-access SSH key + admin passphrase** | **OFFLINE recovery kit only** | Never on the server after `setup-borg-append-only.sh` finishes. The script will prompt and securely delete the on-server copies. |
 
 The rule of thumb: **if a script on the server doesn't need to read it at 03:00 on a Tuesday, it should not be on the server.**
 
@@ -114,6 +160,30 @@ Wait for it to finish. Then:
 - [ ] Note the GitLab server public IP from `terraform output gitlab_server_public_ip`
 - [ ] **Configure DNS**: A record `<domain>` → load balancer IP, TTL 300
 - [ ] (Optional) CNAME `registry.<domain>` → `<domain>` for the container registry
+
+**Storage Box paste-back** (this is the step that bridges Terraform's
+runtime outputs back into the seed-driven config flow):
+
+```bash
+terraform -chdir=terraform output storage_box_post_apply
+```
+
+The output prints the exact `host:` and `user:` strings you need:
+
+- [ ] Paste the printed `host:` value into `seed.yaml` →
+      `backup.storage_box.host`
+- [ ] Paste the printed `user:` value into `seed.yaml` →
+      `backup.storage_box.user`
+- [ ] Re-run the bootstrap to regenerate `/etc/gitlab-backup.conf` with
+      the now-known sub-account address:
+      ```bash
+      python scripts/seed_bootstrap.py seed.yaml --target borg-conf
+      ```
+      (saves to stdout — capture it for §4/§6)
+- [ ] For the **offline recovery kit**, also record the PRIMARY account's
+      host + username (`storage_box_server` / `storage_box_username`
+      outputs) — those are needed when using the offline full-access SSH
+      key for `borg prune` / `borg check` operations.
 
 **Wait for cloud-init to finish** on the GitLab server. This takes 15-20 minutes (apt updates, GitLab package install, fail2ban, mounting volumes):
 
@@ -248,16 +318,35 @@ This is the step that creates the chicken-and-egg risk if §5b is skipped. Do no
 
 ## 6. Set up backups (20 min)
 
+The Storage Box and its append-only sub-account were created by
+`terraform apply` in §3. The two scripts below install the SSH keys
+the GitLab server uses to write hourly backups and constrain that key
+to append-only. Both need the sub-account password from `seed.yaml`
+(`backup.storage_box.subaccount_password`) — pass it via env var; it
+is NOT persisted in `/etc/gitlab-backup.conf` (the only place that
+password should live long-term is the offline kit, until you rotate
+it in §6c below).
+
 ```bash
 ssh root@<gitlab-public-ip>
 
-# Initialise the Borg repository against the Storage Box (interactive, one-time)
-/opt/botlab/scripts/setup-borg-backup.sh
+# Step 6a — init the Borg repo via SFTP-installed unconstrained key
+sudo STORAGEBOX_SUBACCOUNT_PASSWORD='<paste-from-seed.yaml>' \
+    /opt/botlab/scripts/setup-borg-backup.sh
 
-# Harden with the append-only sub-account (also interactive)
-/opt/botlab/scripts/setup-borg-append-only.sh
+# Step 6b — REPLACE the unconstrained key with a forced-command,
+# append-only authorized_keys. After this, the GitLab server CAN create
+# new archives but CANNOT delete or modify existing ones — even at root.
+sudo STORAGEBOX_SUBACCOUNT_PASSWORD='<paste-from-seed.yaml>' \
+    /opt/botlab/scripts/setup-borg-append-only.sh
 
-# Trigger the hourly cron manually to seed the first archive
+# Step 6c — ROTATE THE SUB-ACCOUNT PASSWORD in the Hetzner Cloud Console.
+# The password has been in shell history twice — it must not stay valid.
+#   console.hetzner.cloud → Storage Boxes → <main user> → Sub-accounts
+#   → "Reset password". Discard the new value (the GitLab server doesn't
+#   need it; it has the constrained SSH key now).
+
+# Step 6d — trigger the hourly cron manually to seed the first real archive
 /usr/local/bin/gitlab-backup-to-borg.sh
 
 # Confirm

@@ -1,7 +1,7 @@
 # ACME Corp GitLab Infrastructure - Master Design Document
 
-**Version**: 2.6
-**Last Updated**: 2026-05-15
+**Version**: 2.7
+**Last Updated**: 2026-05-18
 **Status**: Draft - Pending Approval
 
 ---
@@ -728,15 +728,39 @@ aws s3 cp gitlab-backup.tar s3://acme-gitlab-immutable/ \
 
 #### 6.3.4 BorgBackup Configuration
 
-**Initialize repository (with append-only sub-account):**
-```bash
-# Main repository initialization (one-time, with full-access credentials)
-borg init --encryption=repokey-blake2 ssh://uXXXXX@uXXXXX.your-storagebox.de:23/./gitlab-borg
+**Provisioning** (as of v2.7 — provider hcloud v1.63.0, May 2026):
 
-# Create Storage Box sub-account via Hetzner Robot:
-# - Name: backup-write
-# - Permissions: Read, Write (NO Delete)
-# Use this restricted account for automated backups
+Storage Boxes and their sub-accounts are now Terraform resources in
+the unified Hetzner Cloud surface — no separate Hetzner Robot account
+required. See `terraform/storage_box.tf` for the actual definitions.
+Both the primary box and the append-only sub-account have
+`lifecycle { prevent_destroy = true }` so a careless `terraform
+destroy` cannot wipe the backup destination.
+
+**Append-only enforcement is at the SSH command layer**, not the
+Hetzner sub-account permission layer. The sub-account API only offers
+`readonly = true` (blocks writes too — useless for backups) or full
+read/write/delete. So the constraint is installed by
+`scripts/setup-borg-append-only.sh`, which SFTPs the sub-account's
+`~/.ssh/authorized_keys` to:
+
+```
+command="borg serve --append-only --restrict-to-repository /gitlab-borg",no-pty,no-port-forwarding,...  ssh-ed25519 AAAA...
+```
+
+The forced command means: any SSH session with this key can ONLY run
+`borg serve --append-only`, restricted to the one repo. A root
+compromise of the GitLab server cannot delete archives — only add new
+ones. Initial `borg init` runs against an unconstrained key
+(installed by `setup-borg-backup.sh`); the constraint is applied
+immediately after, by `setup-borg-append-only.sh`.
+
+```bash
+# Both scripts on the GitLab server, run back-to-back, supplying the
+# sub-account password (NOT a long-lived server secret — used twice for
+# SFTP install, then rotated in the Hetzner Console):
+sudo STORAGEBOX_SUBACCOUNT_PASSWORD='...' /opt/botlab/scripts/setup-borg-backup.sh
+sudo STORAGEBOX_SUBACCOUNT_PASSWORD='...' /opt/botlab/scripts/setup-borg-append-only.sh
 ```
 
 **Backup script** (`/usr/local/bin/gitlab-backup-to-borg.sh`):
@@ -1426,9 +1450,11 @@ The encrypted `seed.yaml` is safe to keep on USB drives, in password managers, o
 | Secret | Cadence | How |
 |--------|---------|-----|
 | Borg encryption passphrase | 12 months OR operator turnover | `borg key change-passphrase` on recovery workstation; update offline kit; re-encrypt with systemd-creds on server |
-| Storage Box append-only SSH key | 12 months OR after suspected compromise | regenerate; update Hetzner Robot sub-account; re-deploy |
-| Storage Box full-access SSH key | 24 months OR operator turnover | regenerate; update offline kit; never on server |
-| `hcloud_token` | 6 months OR operator turnover | Hetzner Cloud console → rotate; update seed.yaml |
+| Storage Box **append-only** SSH key (on server) | 12 months OR after suspected compromise | re-run `setup-borg-append-only.sh` on the server — generates a fresh keypair and SFTPs the new constrained `authorized_keys`, replacing the old. Old key revoked atomically by the SFTP overwrite. |
+| Storage Box **sub-account password** | After every `setup-borg-*.sh` run (one-shot use) and after any operator turnover | Hetzner Cloud Console → Storage Box → Sub-accounts → Reset password. No server-side update needed; the server uses the SSH key, not the password. |
+| Storage Box **primary** (OFFLINE) SSH key | 24 months OR operator turnover | regenerate keypair offline; update offline kit; replace via Hetzner Console (the Terraform resource has `ignore_changes = [ssh_keys]` because the create-only API would otherwise force destroy/replace and lose the repo). |
+| Storage Box primary password | 12 months OR operator turnover | Hetzner Cloud Console → Storage Box → Reset password. Update `seed.yaml` + offline kit. Used only for Console access. |
+| `hcloud_token` | 6 months OR operator turnover | Hetzner Cloud console → rotate; update seed.yaml. **NB:** this token now controls Storage Boxes too (since the Cloud Console unification in v2.7), so its blast radius grew — treat with extra care. |
 | GitLab per-script API tokens | At each script install | scripted; generate fresh on every install |
 | SMTP password | 12 months | rotate at provider; update seed; re-encrypt via systemd-creds |
 | Azure AD SAML cert | per Azure cert lifetime | follow Azure AD rotation procedure; update seed |
@@ -1473,3 +1499,4 @@ Track "last rotated" dates either in `seed.yaml` as comments next to each value 
 | 2.4 | 2026-05-15 | Claude Code | Fleshed out break-glass from "designed" to "scripted, verified, operator-proof". New `scripts/setup-break-glass.sh` provisions the account (with server-side TOTP) via `gitlab-rails runner`, eliminating the UI click-through. New `scripts/verify-break-glass.sh` performs quarterly verification: confirms account state (exists, admin, confirmed, 2FA, not blocked), confirms the bypass URL serves the local-auth form, and emits Prometheus textfile metrics. Three new Alertmanager rules: `BreakGlassAccountMissing`, `BreakGlassKitVerificationStale` (100d), `BreakGlassKitVerificationCritical` (180d), plus `BreakGlassVerifyScriptNotRunning`. New `docs/OFFLINE-KIT-TEMPLATE.md` centralises the kit's contents and rotation cadence in one copyable template. RUNBOOK Appendix D extended: §D.6 (account doesn't exist at all), §D.7 (TOTP secret rotation), §D.8 (manual audit-log query). RUNBOOK §7 gained a post-recovery line clarifying that the break-glass account survives a normal restore. |
 | 2.5 | 2026-05-15 | Claude Code | New §5.3.4 "Access Scoping (Who Can Use SSO)" documents the layered controls — Assignment Required (must-do), `gitlab-users` security group (recommended pattern), Conditional Access (premium tier with explicit licensing caveat — NOT in M365 Business Basic/Standard), `omniauth_block_auto_created_users` (defence-in-depth, recommended off at our scale due to friction). Decision table per control + costs + scale-appropriate recommendation. DEPLOY.md §5a expanded with the specific Entra admin-centre clicks: create Enterprise App, create `gitlab-users` group with self added first (sequencing safety), flip Assignment Required, assign group, optional Conditional Access policy for MFA, verification that a non-assigned user is rejected at Entra. |
 | 2.6 | 2026-05-15 | Claude Code | **Project-wide refactor.** Fixes per security-review sweep: corrected §1.3 cost (70 → 63 EUR), added "Phase 4 prerequisite" disclaimers to monitoring/alerts.yml entries whose metric sources don't yet exist, reframed README's monitoring section as target state rather than current state. New scripts close the implementation gap: `scripts/borg-check.sh` (weekly Borg integrity → `gitlab_backup_integrity` metric) and `scripts/restore-test.sh` (weekly ephemeral-CX21 restore drill with cost-safety trap → `gitlab_restore_test_success` metric). New `systemd/` directory with timer+service units for all scheduled jobs (hourly backup, weekly borg-check, weekly restore-test, monthly break-glass verify) reading credentials via `LoadCredentialEncrypted=`. New `external-observer/` directory with `setup-observer.sh` for provisioning the dead-man's-switch on a non-Hetzner VPS (blackbox_exporter + Watchdog webhook receiver + Caddy TLS). Security hygiene: new `SECURITY.md` (responsible disclosure), gitleaks added to CI (was pre-commit-only — bypassable), unused `tls`/`local` provider pins removed from `terraform/versions.tf`, T2.1 seed validator now refuses Hetzner endpoints for the S3 immutable tier. Doc consolidation: ToC expanded with subsections, DEPLOY.md §9 shortened to a pointer at `OFFLINE-KIT-TEMPLATE.md`, status terminology normalised in TODO.md, CLAUDE.md section anchors prefixed with `§`. Closed T1.5 (partial), T2.1, T2.6, T2.8b, T3.6, T3.7. New TODOs T4.1-T4.3 opened. |
+| 2.7 | 2026-05-18 | Claude Code | **Storage Box migration: Hetzner Robot → Hetzner Cloud Console + Terraform.** As of hcloud provider v1.63.0 (May 2026), Storage Boxes and their sub-accounts are managed in the unified Cloud Console with Terraform support. New `terraform/storage_box.tf` provisions both the primary box and the append-only sub-account, with `lifecycle { prevent_destroy = true }` on both and `ignore_changes = [ssh_keys]` on the primary (the API forces replace on key updates, which would wipe the repo). Append-only enforcement remains at the SSH command layer (forced `borg serve --append-only --restrict-to-repository` in `authorized_keys`) because the Hetzner sub-account API only offers `readonly` or full-rw — neither matches the append-only requirement. `scripts/setup-borg-backup.sh` and `scripts/setup-borg-append-only.sh` shrunk to ~150 lines each: no more Robot UI prompts; they SFTP the authorized_keys file using sshpass + the sub-account's initial password (passed via env var, NOT persisted on the server). DEPLOY.md §0 drops the Robot prerequisite; §1 repurposed to "generate offline credentials" (the OFFLINE SSH keypair + the two passwords); §3 gains a "paste-back" step where the operator copies `terraform output storage_box_post_apply` values into `seed.yaml.backup.storage_box.host/user`; §6 documents the env-var-supplied password and immediate post-run rotation. Appendix C.8 rotation matrix split into five Storage-Box-specific rows (was two) and adds a note that the `hcloud_token` blast radius grew because one token now controls both the cloud server and the backups. SECURITY-ASSESSMENT.md §2.1 threat-model updated: "Storage Box credential theft" and "Hetzner account compromise" are now closer to the same row. Closes the pre-deploy gap that the previous workflow opened: no procurement step is now unmanaged by IaC. Also landed in this commit: pre-deploy security fixes T1.4 (required `trusted_ssh_ips`, fail-loud), T1.6 (vendored `packages.gitlab.com` install script at `scripts/vendor/install-gitlab-repo.sh` with CI checksum verification), T2.3 (`sshd` fail2ban jail in cloud-init). |
