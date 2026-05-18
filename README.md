@@ -66,7 +66,7 @@ All components are **100% open source** (no license fees).
 
 ```bash
 cd terraform
-cp terraform.tfvars.example terraform.tfvars
+cp terraform.tfvars.template terraform.tfvars
 # Edit terraform.tfvars with your values
 
 terraform init
@@ -113,7 +113,7 @@ botlab/
 │   ├── backup-to-s3.sh             # S3 immutable backup (Object Lock)
 │   ├── restore-gitlab.sh           # DR restore procedure (operator-driven)
 │   └── verify-backup.sh            # Backup verification
-├── seed.example.yaml               # Single source of truth config template
+├── seed.template.yaml              # Single source of truth config template
 └── .github/workflows/test.yml      # CI: shellcheck, terraform validate
 ```
 

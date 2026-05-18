@@ -361,7 +361,7 @@ Geographic diversification:
 
 4. **Extend backup retention** — **IMPLEMENTED**
    - Monthly backups kept for 12 months (changed from 6)
-   - Updated in: `seed_schema.py`, `setup-borg-backup.sh`, `seed.example.yaml`
+   - Updated in: `seed_schema.py`, `setup-borg-backup.sh`, `seed.template.yaml`
 
 5. **Implement backup integrity monitoring** — **PLANNED**
    - Weekly cron runs `borg check --repository-only`
@@ -377,7 +377,7 @@ Geographic diversification:
 
 7. **Add immutable backup tier** — **IMPLEMENTED**
    - Script: `scripts/backup-to-s3.sh` (weekly, Object Lock COMPLIANCE mode)
-   - Seed config: `backup.s3` section in `seed.example.yaml`
+   - Seed config: `backup.s3` section in `seed.template.yaml`
    - Config generator: `seed_bootstrap.py --target s3-conf`
 
 8. **Implement file integrity monitoring**

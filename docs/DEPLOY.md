@@ -88,7 +88,7 @@ The seed is the single source of truth. Everything downstream is generated from 
 ```bash
 git clone <this-repo>
 cd botlab
-cp seed.example.yaml seed.yaml
+cp seed.template.yaml seed.yaml
 $EDITOR seed.yaml
 ```
 
@@ -200,10 +200,10 @@ Don't proceed until that returns `status: done`.
 GitLab is installed at the pinned version but is using the default `gitlab.rb`. You now need to apply the real config.
 
 ```bash
-# Render gitlab.rb from the template (manual: scripts/gitlab.rb.template).
+# Render gitlab.rb from the template (manual: scripts/gitlab.template.rb).
 # Customise for your domain, SMTP, SAML, object storage credentials.
-$EDITOR scripts/gitlab.rb.template
-scp scripts/gitlab.rb.template root@<gitlab-public-ip>:/etc/gitlab/gitlab.rb
+$EDITOR scripts/gitlab.template.rb
+scp scripts/gitlab.template.rb root@<gitlab-public-ip>:/etc/gitlab/gitlab.rb
 
 # Push the backup configuration captured in section 2
 scp /tmp/gitlab-backup.conf root@<gitlab-public-ip>:/etc/gitlab-backup.conf

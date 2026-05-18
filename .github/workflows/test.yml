@@ -88,8 +88,8 @@ jobs:
       - name: Install dependencies
         run: pip install pydantic pyyaml
 
-      - name: Validate seed.example.yaml shape
-        # seed.example.yaml contains SECRET:* placeholders; we only check the
+      - name: Validate seed.template.yaml shape
+        # seed.template.yaml contains SECRET:* placeholders; we only check the
         # schema accepts the shape, not that secrets are real.
         run: |
           python - <<'PY'
@@ -97,7 +97,7 @@ jobs:
           sys.path.insert(0, "scripts")
           from seed_schema import SeedConfig
           import yaml
-          raw = yaml.safe_load(open("seed.example.yaml"))
+          raw = yaml.safe_load(open("seed.template.yaml"))
           try:
               SeedConfig(**raw)
           except ValueError as exc:
@@ -105,5 +105,5 @@ jobs:
               if "Placeholder secrets still present" not in msg:
                   print("Unexpected schema error:", msg)
                   sys.exit(1)
-          print("seed.example.yaml shape OK")
+          print("seed.template.yaml shape OK")
           PY

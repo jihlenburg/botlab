@@ -8,7 +8,7 @@
 # in a password manager. NEVER commit seed.yaml to version control.
 #
 # Usage:
-#   cp seed.example.yaml seed.yaml
+#   cp seed.template.yaml seed.yaml
 #   # Edit seed.yaml with real values
 #   python scripts/seed_bootstrap.py seed.yaml --validate
 #   python scripts/seed_bootstrap.py seed.yaml --target all

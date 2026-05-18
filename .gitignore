@@ -37,7 +37,7 @@ terraform/.terraform.lock.hcl
 terraform/*.tfstate
 terraform/*.tfstate.*
 terraform/*.tfvars
-!terraform/*.tfvars.example
+!terraform/*.tfvars.template
 terraform/crash.log
 terraform/crash.*.log
 terraform/*.tfplan
@@ -203,7 +203,15 @@ temp/
 # Seed Configuration (contains secrets)
 # =============================================================================
 seed.yaml
-!seed.example.yaml
+!seed.template.yaml
+
+# =============================================================================
+# Claude Code workspace (worktrees, session state)
+# =============================================================================
+# Worktrees live under .claude/worktrees/<name>/ and have their own .git
+# pointers, which git sees as embedded repos when run from the parent.
+# Keep them out of the parent repo entirely.
+.claude/
 
 # =============================================================================
 # Project Specific

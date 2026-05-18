@@ -5,7 +5,7 @@
 # NEVER commit terraform.tfvars to version control - it contains secrets
 #
 # Usage:
-#   cp terraform.tfvars.example terraform.tfvars
+#   cp terraform.tfvars.template terraform.tfvars
 #   # Edit terraform.tfvars with your values
 #   terraform init
 #   terraform plan

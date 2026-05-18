@@ -101,7 +101,7 @@ botlab/
 ├── CLAUDE.md                       # This file (AI assistant guidance)
 ├── README.md                       # Project overview and quick start
 ├── TODO.md                         # Implementation status and task tracking
-├── seed.example.yaml               # Seed config template (copy to seed.yaml)
+├── seed.template.yaml               # Seed config template (copy to seed.yaml)
 ├── docs/
 │   ├── DESIGN.md                   # Master design document (READ FIRST)
 │   ├── SECURITY-ASSESSMENT.md      # Security & ransomware analysis
@@ -109,7 +109,7 @@ botlab/
 │   └── RUNBOOK-RECOVERY.md         # Operator-facing DR runbook
 ├── terraform/                      # Infrastructure as code
 │   ├── *.tf                        # Hetzner Cloud resources
-│   ├── terraform.tfvars.example    # Example configuration (copy to terraform.tfvars)
+│   ├── terraform.tfvars.template    # Example configuration (copy to terraform.tfvars)
 │   └── templates/                  # Cloud-init templates
 ├── scripts/                        # Deployment and maintenance scripts
 │   ├── seed_schema.py              # Pydantic model for seed.yaml validation
@@ -126,6 +126,39 @@ botlab/
 ├── Makefile                        # Common development commands
 └── .pre-commit-config.yaml         # Pre-commit hooks configuration
 ```
+
+## File Naming Conventions
+
+**Copy-and-customize template files** use the suffix `.template.<ext>`. The
+real, operator-filled-in file (gitignored, or operator-deployed to the
+server) lives at the same base name without `.template`. Keeping `.<ext>`
+last preserves editor syntax highlighting in the template too.
+
+| Template file (committed) | Real file (gitignored / deployed) |
+|---|---|
+| `seed.template.yaml` | `seed.yaml` |
+| `terraform/terraform.tfvars.template` | `terraform/terraform.tfvars` |
+| `scripts/gitlab.template.rb` | `/etc/gitlab/gitlab.rb` (on the server) |
+
+When you add a new copy-and-customize template file, use this naming
+pattern. Update `.gitignore` to ignore the real file and explicitly
+re-include the template if there's any chance the gitignore pattern
+would catch it.
+
+**Not** in this naming scheme:
+
+- **`docs/*-TEMPLATE.md`** (e.g. `OFFLINE-KIT-TEMPLATE.md`): documentation
+  *about* a template, not a template file itself. Stays in `docs/`
+  uppercase-kebab style.
+- **`terraform/templates/`**: directory of cloud-init templates processed
+  at `terraform apply` time by `templatefile()`. Different mechanism;
+  filenames are whatever Terraform reads (e.g. `gitlab-cloud-init.yaml`).
+- **`scripts/vendor/*`**: vendored upstream files pinned by checksum,
+  not customized. No template-vs-real distinction applies.
+
+The previous convention was inconsistent — three different patterns
+(`seed.example.yaml`, `.tfvars.example`, `.rb.template`) for the same
+concept. Unified to `.template.<ext>` on 2026-05-18.
 
 ## Seed Configuration (Single Source of Truth)
 
@@ -154,7 +187,7 @@ python scripts/seed_bootstrap.py seed.yaml --target s3-conf
 | `borg-conf` | stdout (`/etc/gitlab-backup.conf` content) |
 | `s3-conf` | stdout (`/etc/gitlab-s3-backup.conf` content) |
 
-**Important:** `seed.yaml` contains secrets and is gitignored. Use `seed.example.yaml` as a template.
+**Important:** `seed.yaml` contains secrets and is gitignored. Use `seed.template.yaml` as a template.
 
 ## Development Commands
 
@@ -184,7 +217,7 @@ make shellcheck
 
 For shell scripts: `shellcheck scripts/*.sh` must pass.
 For Terraform: `terraform fmt -check -recursive` and `terraform validate` must pass.
-For Python utilities (seed bootstrap): the script should validate cleanly against `seed.example.yaml`.
+For Python utilities (seed bootstrap): the script should validate cleanly against `seed.template.yaml`.
 
 ## Before Making Changes
 
@@ -210,14 +243,14 @@ For Python utilities (seed bootstrap): the script should validate cleanly agains
 | `docs/DESIGN.md` | Master design document (READ FIRST) |
 | `docs/SECURITY-ASSESSMENT.md` | Security analysis and recommendations |
 | `terraform/*.tf` | Infrastructure definitions |
-| `terraform/terraform.tfvars.example` | Configuration template with documentation |
+| `terraform/terraform.tfvars.template` | Configuration template with documentation |
 | `terraform/templates/gitlab-cloud-init.yaml` | Server bootstrap configuration |
 | `scripts/setup-borg-backup.sh` | BorgBackup initialization |
 | `scripts/setup-borg-append-only.sh` | Append-only Borg hardening (ransomware protection) |
 | `scripts/backup-to-s3.sh` | S3 immutable backup with Object Lock |
 | `scripts/restore-gitlab.sh` | Disaster recovery procedure |
 | `TODO.md` | Implementation status and task tracking |
-| `seed.example.yaml` | Seed config template (single source of truth) |
+| `seed.template.yaml` | Seed config template (single source of truth) |
 | `scripts/seed_bootstrap.py` | Generate downstream configs from seed.yaml |
 | `scripts/seed_schema.py` | Pydantic validation model for seed.yaml |
 
@@ -232,7 +265,7 @@ When making changes to this project, update the relevant documentation:
 | Architecture changes | `docs/DESIGN.md` (authoritative), then `README.md` |
 | Security changes | `docs/SECURITY-ASSESSMENT.md`, `docs/DESIGN.md` Section 8-9 |
 | New scripts | `README.md` Project Structure, `TODO.md` if applicable |
-| Terraform changes | `terraform/terraform.tfvars.example`, `docs/DESIGN.md` Section 4 |
+| Terraform changes | `terraform/terraform.tfvars.template`, `docs/DESIGN.md` Section 4 |
 | Monitoring changes | `docs/DESIGN.md` Section 7, alert-rules files |
 | Test changes | `.github/workflows/test.yml`, `TODO.md` |
 

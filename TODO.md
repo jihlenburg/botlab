@@ -24,7 +24,7 @@
   - Cloud-init for GitLab server bootstrap (fail2ban, cron, Borg)
 
 - [x] **Seed configuration**
-  - `seed.example.yaml` - Single source of truth template
+  - `seed.template.yaml` - Single source of truth template
   - `scripts/seed_schema.py` - Pydantic validation
   - `scripts/seed_bootstrap.py` - Generates `terraform.tfvars`, Borg conf, S3 conf
 
@@ -104,7 +104,7 @@ See `docs/SECURITY-REVIEW-2026-05-15.md` for full context. Items grouped by tier
 
 - [ ] **T1.2** Configure remote Terraform state backend (Hetzner Object Storage, encrypted); also snapshot state into offline recovery kit. **Urgency bumped 2026-05-18 (design v2.7):** state now contains Storage Box + sub-account IDs (the load-bearing ransomware-resistant copy of all data). Local-only state is acceptable for a typo-resistant `terraform apply` (we have `prevent_destroy` on both resources), but losing the state file would force a `terraform import` recovery that's substantially more painful than it used to be.
 - [ ] **T1.3** Define recovery-workstation profile in `docs/RUNBOOK-RECOVERY.md` (dedicated machine OR live-USB, FDE, network isolation when not recovering)
-- [x] **T1.4** Made `trusted_ssh_ips` a required Terraform variable with two validation blocks (non-empty + every entry is a valid CIDR). Removed the `dynamic "rule"` fallback in `terraform/firewalls.tf` that opened SSH to `0.0.0.0/0`. `terraform plan` now fails loudly on empty list, invalid CIDR, or omitted variable. Files: `terraform/variables.tf`, `terraform/firewalls.tf`, `terraform/terraform.tfvars.example`. Verified locally with three `terraform plan` invocations covering empty, invalid, and valid inputs.
+- [x] **T1.4** Made `trusted_ssh_ips` a required Terraform variable with two validation blocks (non-empty + every entry is a valid CIDR). Removed the `dynamic "rule"` fallback in `terraform/firewalls.tf` that opened SSH to `0.0.0.0/0`. `terraform plan` now fails loudly on empty list, invalid CIDR, or omitted variable. Files: `terraform/variables.tf`, `terraform/firewalls.tf`, `terraform/terraform.tfvars.template`. Verified locally with three `terraform plan` invocations covering empty, invalid, and valid inputs.
 - [x] **T1.5** Monitoring stack exposure & auth model — partial: DEPLOY.md §7 now says "bind to 127.0.0.1" and "SSH port-forward only" explicitly; external observer webhook auth via shared secret documented in `external-observer/`. Pending: actually applying the binding in the install commands (operator's job in Phase 4).
 - [x] **T1.6** Vendored the upstream packages.gitlab.com repo-install script at `scripts/vendor/install-gitlab-repo.sh` (kept under `vendor/` so the non-recursive `shellcheck scripts/*.sh` glob does not lint upstream content). Cloud-init now ships the script via `write_files` with `encoding: b64`, sourced at `terraform apply` time via `base64encode(file(...))` in `terraform/servers.tf`. Cloud-init `runcmd` runs `bash /usr/local/bin/install-gitlab-repo.sh` instead of `curl … | bash`. Added a `verify-vendored-checksums` job to `.github/workflows/test.yml` that runs `sha256sum -c CHECKSUMS`. Refresh procedure documented in `scripts/vendor/README.md`. Initial pin: sha256 `3f6a403e…2e8d30b`, audited 2026-05-18.
 

@@ -71,7 +71,7 @@ class InfrastructureConfig(BaseModel):
 
 class GitLabConfig(BaseModel):
     domain: str
-    # Pinned apt package version (e.g. "17.10.0-ce.0"). See seed.example.yaml.
+    # Pinned apt package version (e.g. "17.10.0-ce.0"). See seed.template.yaml.
     version: str = "17.10.0-ce.0"
     # NOTE: a global `private_token` field was deliberately removed in v2.2.
     # Per-cron-job tokens should be generated on demand against the live
