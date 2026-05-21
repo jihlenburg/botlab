@@ -52,7 +52,7 @@ SSH_KEY="${SSH_KEY:-/root/.ssh/restore_test_key}"
 SSH_KEY_NAME="${SSH_KEY_NAME:-restore-test-key}"  # name as registered in Hetzner Cloud
 GITLAB_VERSION="${GITLAB_VERSION:-17.10.0-ce.0}"
 SERVER_TYPE="${SERVER_TYPE:-cx21}"
-LOCATION="${LOCATION:-fsn1}"
+LOCATION="${LOCATION:-hel1}"
 IMAGE="${IMAGE:-ubuntu-24.04}"
 
 NOW=$(date +%s)

@@ -39,7 +39,7 @@ organization:
 infrastructure:
   hetzner:
     api_token: "SECRET:hetzner-api-token"      # from console.hetzner.cloud
-    location: "fsn1"                           # fsn1 | nbg1 | hel1
+    location: "hel1"                           # fsn1 | nbg1 | hel1
 
   # ---- Remote Terraform state backend (security review T1.2, design v2.8) ----
   # Uses Hetzner Object Storage (S3-compatible).
@@ -57,8 +57,8 @@ infrastructure:
   # clearly when generating ("terraform-state" or similar) so they're
   # identifiable in the Console list.
   terraform_state:
-    bucket: "lupa-terraform-state"             # globally unique across all Hetzner OS
-    endpoint: "https://fsn1.your-objectstorage.com"  # region prefix matches bucket location
+    bucket: "lupa-gitlab-terraform-state"      # globally unique across all Hetzner OS
+    endpoint: "https://hel1.your-objectstorage.com"  # region prefix matches bucket location
     access_key: "SECRET:hcloud-os-state-access-key"
     secret_key: "SECRET:hcloud-os-state-secret-key"
 
@@ -104,7 +104,7 @@ backup:
     # See docs/DEPLOY.md §1 and terraform/storage_box.tf.
     name: "acme-gitlab-backups"                # cosmetic label in Hetzner console
     type: "bx21"                                # bx11 / bx21 / bx31 / bx41 — bx21 (5TB) recommended floor
-    location: "fsn1"                            # fsn1 / nbg1 / hel1 — usually same as the GitLab server
+    location: "hel1"                            # fsn1 / nbg1 / hel1 — usually same as the GitLab server
     password: "SECRET:storage-box-password"     # `openssl rand -base64 24` — emergency Hetzner Console access only
     subaccount_password: "SECRET:storage-box-subaccount-password"  # `openssl rand -base64 24` — used once by setup-borg-append-only.sh
     ssh_public_key: "SECRET:storage-box-offline-ssh-public-key"    # OFFLINE full-access pubkey; private half ONLY in recovery kit

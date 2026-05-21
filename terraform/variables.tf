@@ -11,7 +11,7 @@ variable "hcloud_token" {
 variable "location" {
   description = "Hetzner datacenter location"
   type        = string
-  default     = "fsn1"
+  default     = "hel1"
 }
 
 variable "environment" {
@@ -149,9 +149,9 @@ variable "storage_box_type" {
 }
 
 variable "storage_box_location" {
-  description = "Storage Box location. Recommended: same region as the GitLab server (fsn1) — Hetzner places it in a different DC within the region. Cross-region (e.g. hel1) gives geo-diversity at the cost of WAN backup latency."
+  description = "Storage Box location. Recommended: same region as the GitLab server (hel1 for this project) — Hetzner places it in a different DC within the region. Cross-region (e.g. fsn1 or nbg1) gives geo-diversity at the cost of WAN backup latency."
   type        = string
-  default     = "fsn1"
+  default     = "hel1"
 
   validation {
     condition     = contains(["fsn1", "nbg1", "hel1"], var.storage_box_location)

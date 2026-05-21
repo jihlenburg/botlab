@@ -26,8 +26,9 @@ This deliberately must NOT live on the GitLab server. Options:
 - **Recommended**: a tiny non-Hetzner VPS (Vultr / Linode / OVH / etc.,
   1 vCPU / 1 GB, ~5 EUR/mo). Survives a Hetzner-wide outage AND a Hetzner
   account-lockout incident.
-- Acceptable: another Hetzner Cloud server in a different DC (Nuremberg /
-  Helsinki). Cheaper but does NOT survive account-level Hetzner problems.
+- Acceptable: another Hetzner Cloud server in a different DC from your
+  primary (e.g. Falkenstein or Nuremberg if your primary is in Helsinki).
+  Cheaper but does NOT survive account-level Hetzner problems.
 - For a smaller setup: a free uptime-monitoring service (UptimeRobot,
   BetterStack, HetrixTools). Solves the LB probe but typically not the
   Watchdog half — most free tiers don't accept inbound webhooks.

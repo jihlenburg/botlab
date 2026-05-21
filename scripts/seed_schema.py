@@ -33,7 +33,7 @@ class OrganizationConfig(BaseModel):
 
 class HetznerConfig(BaseModel):
     api_token: str
-    location: Literal["fsn1", "nbg1", "hel1"] = "fsn1"
+    location: Literal["fsn1", "nbg1", "hel1"] = "hel1"
 
 
 class TerraformStateConfig(BaseModel):
@@ -104,7 +104,7 @@ class StorageBoxConfig(BaseModel):
     # of provider v1.63.0, May 2026).
     name: str = "acme-gitlab-backups"
     type: Literal["bx11", "bx21", "bx31", "bx41"] = "bx21"
-    location: Literal["fsn1", "nbg1", "hel1"] = "fsn1"
+    location: Literal["fsn1", "nbg1", "hel1"] = "hel1"
 
     # Primary Storage Box password — used for emergency Hetzner Console
     # access only. Day-to-day Borg backups authenticate via SSH key.
@@ -232,7 +232,7 @@ class SeedConfig(BaseModel):
                 errors.append(
                     f"infrastructure.terraform_state.endpoint '{tfs.endpoint}' must "
                     "be an https:// URL (the Hetzner Object Storage region endpoint, "
-                    "e.g. https://fsn1.your-objectstorage.com)."
+                    "e.g. https://hel1.your-objectstorage.com)."
                 )
         # Reject explicit-empty credentials when they're not placeholders.
         # (Empty + placeholder is the pre-fill state; both empty + non-placeholder

@@ -82,7 +82,7 @@ terraform init     # if state is fresh
 terraform apply -target=hcloud_server.gitlab_primary
 ```
 
-This brings up a new CPX31 in Falkenstein with the cloud-init that installs GitLab CE at the pinned version. **Wait for cloud-init to finish** — typically 10-15 minutes. Confirm with:
+This brings up a new CPX31 in Helsinki with the cloud-init that installs GitLab CE at the pinned version. **Wait for cloud-init to finish** — typically 10-15 minutes. Confirm with:
 
 ```bash
 NEW_IP="$(terraform output -raw gitlab_server_public_ip)"

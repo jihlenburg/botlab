@@ -34,10 +34,10 @@ gitlab_rails['object_store']['enabled'] = true
 gitlab_rails['object_store']['proxy_download'] = true
 gitlab_rails['object_store']['connection'] = {
   'provider' => 'AWS',
-  'endpoint' => 'https://fsn1.your-objectstorage.com',
+  'endpoint' => 'https://hel1.your-objectstorage.com',
   'aws_access_key_id' => '<S3_ACCESS_KEY>',
   'aws_secret_access_key' => '<S3_SECRET_KEY>',
-  'region' => 'fsn1',
+  'region' => 'hel1',
   'path_style' => true
 }
 

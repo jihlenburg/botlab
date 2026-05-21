@@ -15,10 +15,10 @@ Before you start, have:
 - [ ] Hetzner Cloud project + API token with read/write scope (this is now the **only** Hetzner account you need — Storage Boxes moved from Robot to Cloud Console as of provider v1.63.0, May 2026)
 - [ ] **Hetzner Object Storage bucket for Terraform remote state**, created via Cloud Console (design v2.8, closes security review T1.2):
   - Cloud Console → **Object Storage** → **Create Bucket**
-  - Choose **Location**: same region as your servers (e.g. `fsn1`)
+  - Choose **Location**: same region as your servers (`hel1` for this project)
   - Choose **Name/URL**: globally unique across all Hetzner Object Storage (e.g. `lupa-terraform-state`)
   - Choose **Visibility**: **Private**
-  - Capture the resulting endpoint (e.g. `https://fsn1.your-objectstorage.com`) — goes into `seed.yaml -> infrastructure.terraform_state.endpoint` in §2
+  - Capture the resulting endpoint (e.g. `https://hel1.your-objectstorage.com`) — goes into `seed.yaml -> infrastructure.terraform_state.endpoint` in §2
 - [ ] **S3-compatible credentials for that bucket**, also via Cloud Console:
   - Cloud Console → **Security** → **S3 Credentials** → **Generate credentials**
   - Description: something identifiable like `terraform-state`
@@ -114,13 +114,13 @@ Specifically, you need:
 - [ ] `organization.admin_email`
 - [ ] `infrastructure.hetzner.api_token`
 - [ ] `infrastructure.terraform_state.bucket` — the name you chose in §0
-- [ ] `infrastructure.terraform_state.endpoint` — region endpoint from §0 (e.g. `https://fsn1.your-objectstorage.com`)
+- [ ] `infrastructure.terraform_state.endpoint` — region endpoint from §0 (e.g. `https://hel1.your-objectstorage.com`)
 - [ ] `infrastructure.terraform_state.access_key` / `.secret_key` — the S3 credentials minted in §0
 - [ ] `infrastructure.ssh.admin_keys.<your-name>` — paste your `~/.ssh/id_ed25519.pub`
 - [ ] `infrastructure.ssh.trusted_ips` — your office/VPN CIDR (do not leave empty in production)
 - [ ] `gitlab.domain` — e.g. `gitlab.yourcompany.com`
 - [ ] `gitlab.version` — pinned package version, e.g. `17.10.0-ce.0` (browse https://packages.gitlab.com/gitlab/gitlab-ce for current options)
-- [ ] `backup.storage_box.name` / `.type` / `.location` — Storage Box provisioning intent (e.g. `acme-gitlab-backups`, `bx21`, `fsn1`)
+- [ ] `backup.storage_box.name` / `.type` / `.location` — Storage Box provisioning intent (e.g. `acme-gitlab-backups`, `bx21`, `hel1`)
 - [ ] `backup.storage_box.password` — primary password from §1 (`openssl rand -base64 24`)
 - [ ] `backup.storage_box.subaccount_password` — append-only sub-account password from §1
 - [ ] `backup.storage_box.ssh_public_key` — OFFLINE recovery pubkey from §1 (the `.pub` you saved; the private half is on the USBs only)

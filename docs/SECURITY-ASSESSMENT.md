@@ -200,7 +200,7 @@ borg init --encryption=keyfile-blake2 $BORG_REPO
 | Monitoring stack failure (Prometheus/Alertmanager down) | ⚠️ Partial | Operators stop seeing alerts | Dead-man's-switch: external uptime probe of GitLab + the Alertmanager itself |
 | Storage Box failure | ✅ Yes | None | S3 immutable backup as secondary destination |
 | Storage Box data corruption | ✅ Yes | None | Weekly `borg check` + S3 immutable copy |
-| Hetzner region outage | ⚠️ Partial | All primary resources in Falkenstein | Move S3 immutable copy to a non-Hetzner provider |
+| Hetzner region outage | ⚠️ Partial | All primary resources in Helsinki | Move S3 immutable copy to a non-Hetzner provider |
 | Hetzner account lockout | ❌ **No** | Cannot provision new servers | Offline Terraform state, documented manual recovery, cross-provider S3 backup |
 | Server compromised | ✅ Partial | Append-only Borg + S3 Object Lock prevent backup deletion | Operator-driven recovery using offline-stored full-access Borg key |
 | Borg repository corruption | ✅ Yes | None | Weekly `borg check`, S3 secondary |
@@ -282,12 +282,12 @@ rclone sync hetzner:gitlab-acme-lfs backup:gitlab-lfs-backup --checksum
 #### Edge Case 5: Simultaneous Multi-Component Failure
 
 **Current State**: Assumed single component failures
-**Risk**: Fire/flood at Falkenstein datacenter affects all components
+**Risk**: Fire/flood at Helsinki datacenter affects all components
 
 **Recommendation**:
 ```
 Geographic diversification:
-1. Backups to different Hetzner region (Nuremberg or Helsinki)
+1. Backups to different Hetzner region (Falkenstein or Nuremberg)
 2. Or: External provider (Backblaze, AWS)
 3. Monthly offline backup stored physically elsewhere
 ```
@@ -486,7 +486,7 @@ Primary: GitLab local backups (hourly, 24h retention)
 
 Secondary: Borg to Storage Box (hourly creation, 12-month monthly retention)
     └── Media: HDD array
-    └── Location: Hetzner Falkenstein (different DC)
+    └── Location: Hetzner Helsinki (different DC)
 
 Tertiary: Immutable S3 (weekly, 12 month retention)
     └── Media: Cloud object storage with WORM

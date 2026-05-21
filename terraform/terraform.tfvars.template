@@ -78,7 +78,7 @@ trusted_ssh_ips = [
 
 storage_box_name     = "acme-gitlab-backups"
 storage_box_type     = "bx21"   # 5TB; bump to bx31/bx41 for larger projects
-storage_box_location = "fsn1"   # same region as the server; Hetzner picks a different DC
+storage_box_location = "hel1"   # same region as the server; Hetzner picks a different DC
 
 # Primary Storage Box password. Used for emergency Hetzner Console access
 # only — day-to-day Borg backups use the SSH key below. Generate with:
@@ -118,10 +118,10 @@ gitlab_server_type = "cpx31"
 server_image = "ubuntu-24.04"
 
 # Datacenter location
-#   fsn1 = Falkenstein, Germany (recommended - best network)
+#   fsn1 = Falkenstein, Germany (Hetzner's best-connected DC overall)
 #   nbg1 = Nuremberg, Germany
-#   hel1 = Helsinki, Finland
-location = "fsn1"
+#   hel1 = Helsinki, Finland (LUPA-Electronics default)
+location = "hel1"
 
 # =============================================================================
 # Storage Configuration

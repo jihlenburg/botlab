@@ -159,7 +159,7 @@ This document defines the complete technical architecture for ACME Corp' GitLab 
 │  │                         │   PRIMARY       │                              │ │
 │  │                         │   (CPX31)       │                              │ │
 │  │                         │                 │                              │ │
-│  │                         │   Falkenstein   │                              │ │
+│  │                         │    Helsinki     │                              │ │
 │  │                         │                 │                              │ │
 │  │                         │  + Prometheus   │                              │ │
 │  │                         │  + Grafana      │                              │ │
@@ -191,10 +191,10 @@ This document defines the complete technical architecture for ACME Corp' GitLab 
 
 | Component | Purpose | Location |
 |-----------|---------|----------|
-| GitLab Primary | Main GitLab instance; also hosts Prometheus/Grafana/Alertmanager and cron-driven backup scripts | Falkenstein |
-| Object Storage | LFS, artifacts, uploads | Falkenstein |
-| Storage Box | Encrypted backups (offsite) | Falkenstein (different DC) |
-| Load Balancer | TLS termination, health checks | Falkenstein |
+| GitLab Primary | Main GitLab instance; also hosts Prometheus/Grafana/Alertmanager and cron-driven backup scripts | Helsinki (hel1) |
+| Object Storage | LFS, artifacts, uploads | Helsinki (hel1) |
+| Storage Box | Encrypted backups (offsite) | Helsinki (different DC) |
+| Load Balancer | TLS termination, health checks | Helsinki (hel1) |
 
 **Notes**:
 - No hot standby secondary. Recovery via backup restoration to new server.
@@ -214,7 +214,7 @@ This document defines the complete technical architecture for ACME Corp' GitLab 
 | **vCPUs** | 4 shared | - |
 | **RAM** | 16 GB | - |
 | **Local Storage** | 160 GB NVMe | - |
-| **Location** | Falkenstein (fsn1) | `location` |
+| **Location** | Helsinki (hel1) | `location` |
 | **OS** | Ubuntu 24.04 LTS | `server_image` |
 | **Cost** | ~18 EUR/month | - |
 
@@ -289,7 +289,7 @@ Subnet: 10.0.2.0/24 (Future CI Runners)
 |-----------|-------|
 | **Capacity** | 5 TB |
 | **Protocol** | SSH/rsync, SFTP |
-| **Location** | Falkenstein (different datacenter) |
+| **Location** | Helsinki (different datacenter) |
 | **Encryption** | Client-side (BorgBackup) |
 | **Cost** | ~16 EUR/month |
 
@@ -367,10 +367,10 @@ nginx['hsts_max_age'] = 31536000
 gitlab_rails['object_store']['enabled'] = true
 gitlab_rails['object_store']['connection'] = {
   'provider' => 'AWS',
-  'endpoint' => 'https://fsn1.your-objectstorage.com',
+  'endpoint' => 'https://hel1.your-objectstorage.com',
   'aws_access_key_id' => '<ACCESS_KEY>',
   'aws_secret_access_key' => '<SECRET_KEY>',
-  'region' => 'fsn1',
+  'region' => 'hel1',
   'path_style' => true
 }
 gitlab_rails['object_store']['objects']['artifacts']['bucket'] = 'gitlab-acme-artifacts'

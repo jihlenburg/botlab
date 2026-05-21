@@ -75,7 +75,7 @@ Two complementary modes — both apply.
 ## Architecture Summary
 
 ```
-GitLab Primary (CPX31, Falkenstein)
+GitLab Primary (CPX31, Helsinki)
   + Prometheus / Grafana / Alertmanager (systemd)
   + cron: hourly backup → Storage Box (Borg, append-only)
   + cron: weekly       → S3 (Object Lock, optional)
