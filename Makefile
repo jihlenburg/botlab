@@ -5,7 +5,7 @@
 # Run 'make help' to see all available targets
 
 .PHONY: help \
-        tf-init tf-plan tf-apply tf-destroy tf-fmt tf-validate tf-output \
+        tf-init tf-init-reconfigure tf-plan tf-apply tf-destroy tf-fmt tf-validate tf-output tf-snapshot \
         seed-validate seed-generate seed-diff \
         shellcheck \
         pre-commit pre-commit-install \
@@ -34,8 +34,11 @@ help: ## Show this help message
 # Terraform (Infrastructure)
 # =============================================================================
 
-tf-init: ## Initialize Terraform
-	cd terraform && terraform init
+tf-init: ## Initialize Terraform with the remote state backend
+	cd terraform && terraform init -backend-config=backend.tfbackend
+
+tf-init-reconfigure: ## Re-initialize Terraform after backend config changes (e.g. S3 key rotation)
+	cd terraform && terraform init -reconfigure -backend-config=backend.tfbackend
 
 tf-plan: ## Show Terraform execution plan
 	cd terraform && terraform plan
@@ -54,6 +57,18 @@ tf-validate: ## Validate Terraform configuration
 
 tf-output: ## Show Terraform outputs
 	cd terraform && terraform output
+
+tf-snapshot: ## Pull remote state to a dated snapshot file for the offline recovery kit (T1.2 phase 2)
+	@DATE=$$(date -u +%Y%m%d-%H%M%S); \
+	FILE="terraform/terraform.tfstate.snapshot-$$DATE"; \
+	echo "Pulling current state from remote backend to $$FILE..."; \
+	terraform -chdir=terraform state pull > "$$FILE"; \
+	chmod 600 "$$FILE"; \
+	echo ""; \
+	echo "Snapshot written ($$(wc -c < "$$FILE") bytes). Next steps:"; \
+	echo "  1. Copy $$FILE to the OFFLINE recovery kit (FDE USB)."; \
+	echo "  2. Update docs/OFFLINE-KIT-TEMPLATE.md §7 'Snapshot date'."; \
+	echo "  3. Securely delete the local copy: shred -u $$FILE"
 
 # =============================================================================
 # Seed Configuration

@@ -36,6 +36,21 @@ class HetznerConfig(BaseModel):
     location: Literal["fsn1", "nbg1", "hel1"] = "fsn1"
 
 
+class TerraformStateConfig(BaseModel):
+    """Remote Terraform state backend (Hetzner Object Storage, S3-compatible).
+
+    Closes security review T1.2. NOT the same as backup.s3 (which is the
+    immutable backup tier and must live off-Hetzner). State on Hetzner is
+    acceptable because we ALSO snapshot to the offline recovery kit after
+    every `terraform apply`. See docs/DEPLOY.md §0 and §3.
+    """
+
+    bucket: str
+    endpoint: str
+    access_key: str
+    secret_key: str
+
+
 class ServerSpec(BaseModel):
     type: str
     image: str = "ubuntu-24.04"
@@ -63,6 +78,7 @@ class SSHConfig(BaseModel):
 
 class InfrastructureConfig(BaseModel):
     hetzner: HetznerConfig
+    terraform_state: TerraformStateConfig
     servers: ServersConfig
     network: NetworkConfig = Field(default_factory=NetworkConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
@@ -199,6 +215,36 @@ class SeedConfig(BaseModel):
             errors.append(
                 f"backup.borg.passphrase must be >= 20 characters (got {len(pp)})"
             )
+
+        # Terraform state backend (T1.2): bucket name + endpoint shape
+        tfs = self.infrastructure.terraform_state
+        if not _has_placeholder(tfs.bucket):
+            # S3-compatible bucket naming rules (3-63 chars, lowercase + digits
+            # + hyphens + dots, must start/end with alphanumeric)
+            if not re.match(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$", tfs.bucket):
+                errors.append(
+                    f"infrastructure.terraform_state.bucket '{tfs.bucket}' is not a "
+                    "valid S3 bucket name (3-63 chars, lowercase alphanumeric + . - , "
+                    "must start and end alphanumeric)."
+                )
+        if not _has_placeholder(tfs.endpoint):
+            if not tfs.endpoint.startswith("https://"):
+                errors.append(
+                    f"infrastructure.terraform_state.endpoint '{tfs.endpoint}' must "
+                    "be an https:// URL (the Hetzner Object Storage region endpoint, "
+                    "e.g. https://fsn1.your-objectstorage.com)."
+                )
+        # Reject explicit-empty credentials when they're not placeholders.
+        # (Empty + placeholder is the pre-fill state; both empty + non-placeholder
+        # means the operator cleared the field.)
+        for fname in ("access_key", "secret_key"):
+            val = getattr(tfs, fname)
+            if val == "":
+                errors.append(
+                    f"infrastructure.terraform_state.{fname} is empty. Mint S3 "
+                    "credentials via Hetzner Console (Security → S3 Credentials → "
+                    "Generate credentials) and paste them in. See DEPLOY.md §0."
+                )
 
         # Storage Box passwords — match the validation in terraform/variables.tf
         sb = self.backup.storage_box

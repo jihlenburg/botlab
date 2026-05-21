@@ -13,6 +13,17 @@ If you are recovering from a disaster, do not use this document — see [RUNBOOK
 Before you start, have:
 
 - [ ] Hetzner Cloud project + API token with read/write scope (this is now the **only** Hetzner account you need — Storage Boxes moved from Robot to Cloud Console as of provider v1.63.0, May 2026)
+- [ ] **Hetzner Object Storage bucket for Terraform remote state**, created via Cloud Console (design v2.8, closes security review T1.2):
+  - Cloud Console → **Object Storage** → **Create Bucket**
+  - Choose **Location**: same region as your servers (e.g. `fsn1`)
+  - Choose **Name/URL**: globally unique across all Hetzner Object Storage (e.g. `lupa-terraform-state`)
+  - Choose **Visibility**: **Private**
+  - Capture the resulting endpoint (e.g. `https://fsn1.your-objectstorage.com`) — goes into `seed.yaml -> infrastructure.terraform_state.endpoint` in §2
+- [ ] **S3-compatible credentials for that bucket**, also via Cloud Console:
+  - Cloud Console → **Security** → **S3 Credentials** → **Generate credentials**
+  - Description: something identifiable like `terraform-state`
+  - **The secret key is shown ONCE.** Capture both `access_key` and `secret_key` immediately into `seed.yaml -> infrastructure.terraform_state.access_key/.secret_key`
+  - Note: these credentials are PROJECT-scoped, not bucket-scoped — they work against any bucket in the same Hetzner project. Name the credentials clearly in the Console so you can identify them later
 - [ ] A registered domain you can point an A record at
 - [ ] An Azure AD tenant with permission to create an Enterprise Application (for SSO)
 - [ ] An SMTP account (Microsoft 365 by default; any will do)
@@ -102,6 +113,9 @@ Specifically, you need:
 
 - [ ] `organization.admin_email`
 - [ ] `infrastructure.hetzner.api_token`
+- [ ] `infrastructure.terraform_state.bucket` — the name you chose in §0
+- [ ] `infrastructure.terraform_state.endpoint` — region endpoint from §0 (e.g. `https://fsn1.your-objectstorage.com`)
+- [ ] `infrastructure.terraform_state.access_key` / `.secret_key` — the S3 credentials minted in §0
 - [ ] `infrastructure.ssh.admin_keys.<your-name>` — paste your `~/.ssh/id_ed25519.pub`
 - [ ] `infrastructure.ssh.trusted_ips` — your office/VPN CIDR (do not leave empty in production)
 - [ ] `gitlab.domain` — e.g. `gitlab.yourcompany.com`
@@ -124,6 +138,7 @@ Per the layered approach in DESIGN.md Appendix C, secrets are NOT treated unifor
 | Secret | Where it lives in normal operation | What you do |
 |--------|-----------------------------------|-------------|
 | `infrastructure.hetzner.api_token` | Operator laptop only (in encrypted `seed.yaml` and the gitignored `terraform.tfvars`) | **Never copy to the server.** Terraform runs from your laptop. |
+| `infrastructure.terraform_state.access_key` / `.secret_key` | Operator laptop only (encrypted `seed.yaml` and the gitignored `terraform/backend.tfbackend`) | **Never copy to the server.** Used by `terraform init -backend-config=` and any subsequent `terraform` command. Rotate via Hetzner Console → Security → S3 Credentials → Generate new + delete old. Project-scoped (not bucket-scoped), so leak = full Object Storage access for the project. |
 | `infrastructure.ssh.admin_keys.*` (public halves) | Server `authorized_keys` via cloud-init | Public keys; private halves stay on operators' workstations (ideally on a hardware token). |
 | `backup.borg.passphrase` | Server `/etc/gitlab-backup.conf` until Layer 2 is implemented, then under `systemd-creds` | This is the only laptop secret that has to live on the server. Plan to migrate it under systemd-creds in Phase 5. |
 | `backup.storage_box.password` (primary) | Operator laptop only (encrypted `seed.yaml`) + offline recovery kit | NEVER on the server. Used once at create time by Terraform; reserved for emergency Hetzner Console access thereafter. |
@@ -147,12 +162,26 @@ This writes `terraform/terraform.tfvars` and prints the contents of `/etc/gitlab
 
 ## 3. Provision infrastructure (15 min hands-on, ~20 min wait)
 
+The Terraform state backend is initialised from `backend.tfbackend`,
+which `seed_bootstrap.py --target all` already generated in §2. Verify
+it's there, then init with `-backend-config` pointing at it:
+
 ```bash
+ls terraform/backend.tfbackend             # should exist, mode 0600 (it contains S3 creds)
 cd terraform
-terraform init
+terraform init -backend-config=backend.tfbackend
 terraform plan       # sanity-check the plan
 terraform apply
 ```
+
+The first-time `init` will:
+- Configure the s3 backend against your Hetzner Object Storage bucket
+- Create the state file in the bucket (`gitlab/terraform.tfstate`)
+- Acquire a state lock for the duration of `plan`/`apply`
+
+If you ever rotate the S3 credentials (or any value in `backend.tfbackend`),
+re-run `seed_bootstrap.py --target tf-backend` then `terraform init
+-reconfigure -backend-config=backend.tfbackend`.
 
 Wait for it to finish. Then:
 

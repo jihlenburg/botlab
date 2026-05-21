@@ -26,11 +26,11 @@ version: 1
 # Organization
 # =============================================================================
 organization:
-  name: "ACME Corp"
-  admin_email: "SECRET:admin-email"           # e.g. admin@yourcompany.com
+  name: "LUPA-Electronics"
+  admin_email: "admin@lupa-electronics.com"
   environment: "prod"                          # prod | staging | dev
   labels:
-    project: "acme-gitlab"
+    project: "botlab"
     managed_by: "terraform"
 
 # =============================================================================
@@ -40,6 +40,28 @@ infrastructure:
   hetzner:
     api_token: "SECRET:hetzner-api-token"      # from console.hetzner.cloud
     location: "fsn1"                           # fsn1 | nbg1 | hel1
+
+  # ---- Remote Terraform state backend (security review T1.2, design v2.8) ----
+  # Uses Hetzner Object Storage (S3-compatible).
+  #
+  # NOT the same as the `backup.s3` section below — that's the ransomware-
+  # resistant immutable backup tier, which MUST live on a NON-Hetzner provider
+  # (seed validator rejects Hetzner endpoints there per T2.1). This section is
+  # just for Terraform's state file. Same-account on Hetzner is acceptable
+  # because we ALSO snapshot state to the offline recovery kit after every
+  # `terraform apply` (DEPLOY.md §9 + OFFLINE-KIT §7).
+  #
+  # Bucket creation and S3 credentials are Console-only flows (Hetzner Cloud
+  # API does not expose them). See DEPLOY.md §0 for the click-path.
+  # The S3 credentials are PROJECT-scoped (not bucket-scoped) — name them
+  # clearly when generating ("terraform-state" or similar) so they're
+  # identifiable in the Console list.
+  terraform_state:
+    bucket: "lupa-terraform-state"             # globally unique across all Hetzner OS
+    endpoint: "https://fsn1.your-objectstorage.com"  # region prefix matches bucket location
+    access_key: "SECRET:hcloud-os-state-access-key"
+    secret_key: "SECRET:hcloud-os-state-secret-key"
+
   servers:
     gitlab:
       type: "cpx31"
